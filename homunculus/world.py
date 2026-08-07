@@ -155,15 +155,21 @@ class World:
                 return
 
     # --- tick -------------------------------------------------------------
-    def apply(self, action: Action, world_rng, t: int) -> dict:
-        """Advance one tick. Fixed consumption order — agent, then movers in
-        sorted id order — is what keeps the run reproducible."""
+    def apply(self, action: Action, world_rng, t: int, actor: str = "agent",
+              move_others: bool = True) -> dict:
+        """Advance one tick. Fixed consumption order — actor, then movers in
+        sorted id order — is what keeps the run reproducible.
+
+        `actor` names which embodied agent is acting, so several minds can share
+        one world. `move_others` lets a multi-agent runtime advance the scripted
+        movers exactly once per tick rather than once per agent.
+        """
         moves: list[dict] = []
         blocked = False
         slipped_flag = False
         consumed = None
 
-        agent = self.entities["agent"]
+        agent = self.entities[actor]
         before = (agent.x, agent.y)
         if action.verb == "move" and action.dir in DIRS:
             agent.heading = HEADING[action.dir]
@@ -184,9 +190,9 @@ class World:
                 f.state["respawn_at"] = t + 200
                 consumed = f.id
         if (agent.x, agent.y) != before:
-            moves.append({"id": "agent", "from": list(before), "to": [agent.x, agent.y]})
+            moves.append({"id": actor, "from": list(before), "to": [agent.x, agent.y]})
 
-        for eid in sorted(self.entities):
+        for eid in sorted(self.entities) if move_others else ():
             e = self.entities[eid]
             if e.kind not in MOVABLE:
                 continue

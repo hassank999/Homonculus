@@ -31,9 +31,10 @@ SCHEMA = {
             "additionalProperties": False,
             "required": ["verb"],
             "properties": {
-                "verb": {"type": "string", "enum": ["goto", "eat", "wait"]},
+                "verb": {"type": "string", "enum": ["goto", "eat", "wait", "say"]},
                 "target": {"type": "string"},
                 "duration": {"type": "integer"},
+                "text": {"type": "string"},
             },
         },
         "prediction": {
@@ -134,7 +135,7 @@ class Mind:
 
         action = (out.parsed or {}).get("action") or {}
         verb = action.get("verb")
-        if verb not in ("goto", "eat", "wait"):
+        if verb not in ("goto", "eat", "wait", "say"):
             self.errors += 1
             return self._fallback(frame, soma)
 
@@ -146,6 +147,13 @@ class Mind:
             choice["target"] = action["target"]
         if verb == "wait":
             choice["duration"] = int(action.get("duration") or 20)
+        if verb == "say":
+            # Speech is an action, not a parallel channel: it costs a turn and
+            # only reaches whoever is close enough to hear.
+            choice["text"] = (action.get("text") or "").strip()[:160] or "..."
+            if not any(a["verb"] == "say" for a in frame.affordances):
+                self.errors += 1
+                return self._fallback(frame, soma)
 
         # Validate against affordances: a hallucinated target is an error path,
         # not something to pass to the motor and discover later.

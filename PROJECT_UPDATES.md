@@ -4,6 +4,52 @@ Running log of progress after the plan was finalized. Newest first. The plan its
 
 ---
 
+## 2026-08-07 — **FIRST LIGHT.** P5 complete, viewer shipped, all hypotheses measured.
+
+**50/50 tests green.** All six phases built. The homunculus runs.
+
+### Final scorecard
+
+| | Claim | Result |
+|---|---|---|
+| **H1** | Gating cuts LLM calls ≥50× without degrading behaviour | **Supported** — 60.9×, behaviour **+14.5%** |
+| **H2** | Surprise-weighted consolidation beats recency and random | **Supported** — 0.197 vs 0.033 vs 0.010 |
+| **H3** | Legible uncertainty produces epistemic action unprompted | **Supported** — 355 actions, 34% refresh |
+| **H4** | Intent-rollout beats diffusion on animate entities | **Falsified** — −2%, four entity types |
+
+Three of four supported; one falsified and reported as such. That ratio is the point — every hypothesis was tested against a baseline that could have killed it.
+
+### P5: two minds, and H4's fairest test
+
+Two fully independent agents share one world — separate belief, body, motor, memory. Neither reads the other's state; each sees the other only through its senses. Scripted movers advance exactly once per tick regardless of population, so physics doesn't depend on how many minds are present.
+
+**Speech is an action, not a channel.** It costs a turn, it's only offered as an affordance when someone is plausibly in earshot, and it reaches only those within hearing range. It immediately caught a real bug: speech became a *habit* and the agent repeated the identical sentence four times running. One-shot acts (`say`, `eat`) are now excluded from habitual re-issue.
+
+**H4 retested against a goal-persistent LLM agent** — the case rollout was supposed to win, since an agent walking to food has genuinely persistent intent unlike a random-waypoint critter. Result: **−2.0%**, and uniformly so across critter (−2.3%), resident (−1.2%), and agent (−2.0%). H4 is falsified robustly across four distinct kinds of moving entity. The learned-persistence mechanism detects this and collapses rollout to the baseline, costing ~2% instead of the 258% the naive version cost. That graceful degradation is the salvageable result.
+
+### Viewer
+
+Self-contained HTML, no server or build step. It renders the thing that matters: the agent's **true position against its believed position**, side by side, plus the surprise trace with a tick mark wherever the mind was actually consulted — so you can see habitual action and deliberation as distinct events. Verified rendering in-browser at t2201: pose error 0.65 visible as offset circles, drives healthy, decision log distinguishing `idle` from `habit`.
+
+### What the build actually taught
+
+Nearly every real insight came from measurement contradicting my design, not from writing code:
+
+- **Thinking every tick is harmful**, not merely wasteful — it scored worst of all conditions.
+- **The surprise gate was backwards.** Surprise as an interrupt: 7× more calls, 30% worse. Surprise as a filter: 60.9× fewer calls, better behaviour. Same signal, opposite plumbing.
+- **A single global constant cannot serve heterogeneous entities** — the displacement envelope had to be learned per entity, and the drift model had to calibrate per elapsed-time band, because short-gap samples outnumber long-gap ones ~200:1 and drown the signal.
+- **Two of my own experiments were methodologically broken** and I caught them: an H2 probe ranked by the very score under test, and an H1 baseline that had silently degenerated into the condition it was meant to be compared against.
+
+### Honest limits
+
+- The mind runs against `MockProvider` throughout. `TogetherProvider` is written, wired, and cost-modelled, but **has not been run against a live key** — no real open model has driven this agent yet. Model IDs should be re-verified against `GET /v1/models` before trusting the cost figures.
+- The task score is homeostasis-based. It shows the agent stays alive and competent; it does not show sophisticated reasoning.
+- The world is deliberately trivial. Findings are about the architecture, not about intelligence.
+
+**Next, if this continues:** a live Together run, the model sweep down the capability ladder (`GLM-5.2 → MiniMax-M3 → gpt-oss-20b`) to answer "how little mind does belief-maintenance need?", and the P4 sleep pass rewritten to use the LLM for genuine semantic distillation rather than counting.
+
+---
+
 ## 2026-08-07 — P3 + P4 complete. **H1 supported. H2 supported.**
 
 42 tests green. The mind, the gate, and memory are in. Everything runs against a deterministic `MockProvider`, so the full loop — prompt assembly, schema validation, parse path, cost accounting — is exercised offline with no key and no spend. `TogetherProvider` is written and ready for a real key.

@@ -140,6 +140,58 @@ def h2(seeds=(1, 2, 3, 11), ticks=6000, capacity=60, k=4):
     return {p: (statistics.mean(v) if v else 0.0) for p, v in results.items()}
 
 
+def h3(seeds=(1, 2, 3, 11), ticks=6000):
+    """H3 — does the agent act to reduce uncertainty?
+
+    An epistemic action is one whose ONLY payoff is variance reduction: going to
+    look at something it is no longer confident about, while no drive is urgent.
+    Counting intentions is not enough — the belief must actually be refreshed —
+    so this also checks that confidence rose afterwards.
+    """
+    from .gate import SurpriseGate
+    from .mind import Mind
+
+    episodes, refreshed = 0, 0
+    for seed in seeds:
+        rt = Runtime(seed, policy=Mind(MockProvider()), gate=SurpriseGate())
+        pending: dict[str, float] = {}
+        for _ in range(ticks):
+            ev = rt.step()
+            dec = ev.get("decision")
+            if dec and dec.get("verb") == "goto":
+                tgt = dec.get("target")
+                view = next((v for v in rt.frame.entities if v.id == tgt), None)
+                urgent = (
+                    rt.soma.drives["energy"].value < 0.55
+                    or rt.soma.drives["warmth"].value < 0.50
+                )
+                # Only counts as epistemic if nothing was pressing and the
+                # target was genuinely uncertain.
+                if view is not None and not urgent and view.conf < 0.6:
+                    episodes += 1
+                    pending[tgt] = view.conf
+            for tgt, before in list(pending.items()):
+                v = next((x for x in rt.frame.entities if x.id == tgt), None)
+                if v is not None and v.observed:
+                    if v.conf > before:
+                        refreshed += 1
+                    del pending[tgt]
+    return {
+        "epistemic_actions": episodes,
+        "beliefs_refreshed": refreshed,
+        "refresh_rate": refreshed / max(episodes, 1),
+    }
+
+
+def format_h3(res: dict) -> str:
+    return (
+        "H3: does the agent move to reduce uncertainty?\n\n"
+        f"  epistemic actions taken : {res['epistemic_actions']}\n"
+        f"  beliefs actually refreshed: {res['beliefs_refreshed']}\n"
+        f"  refresh rate            : {res['refresh_rate']:.2f}"
+    )
+
+
 def format_h2(res: dict) -> str:
     out = ["H2: which retention policy preserves answerable memories?", ""]
     for p, v in sorted(res.items(), key=lambda kv: -kv[1]):

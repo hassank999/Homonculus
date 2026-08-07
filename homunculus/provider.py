@@ -201,7 +201,10 @@ class MockProvider:
             frame = json.loads(user[user.index("{"):user.rindex("}") + 1])
         except (ValueError, json.JSONDecodeError):
             frame = {}
-        choice = self._decide(frame)
+        # Gate speech on the call counter rather than the tick: with habitual
+        # action, decisions are rare enough that a tick-based schedule would
+        # essentially never coincide with one.
+        choice = self._decide(frame, speak_now=(self.calls % 12 == 0))
         parsed = {
             "action": choice,
             "prediction": {"expect_surprise": "low"},
@@ -218,7 +221,7 @@ class MockProvider:
         return Completion(parsed, usage, text)
 
     @staticmethod
-    def _decide(frame: dict) -> dict:
+    def _decide(frame: dict, speak_now: bool = False) -> dict:
         drives = frame.get("drives") or {}
         ents = frame.get("entities") or []
         affs = frame.get("affordances") or []
@@ -241,6 +244,14 @@ class MockProvider:
                 return {"verb": "goto", "target": t}
         if drives.get("fatigue", 0) > 0.55:
             return {"verb": "wait", "duration": 40}
+        # Speech is available only when someone is plausibly in earshot; say
+        # something occasionally so the channel is exercised.
+        if any(a["verb"] == "say" for a in affs) and speak_now:
+            other = next((e for e in ents if e.get("kind") == "agent"), None)
+            if other is not None:
+                return {"verb": "say",
+                        "text": f"i see {other['id']} at bearing "
+                                f"{other.get('bearing')} range {other.get('range')}"}
         stale = [e for e in ents if not e.get("observed") and e.get("conf", 1) < 0.6]
         if stale:
             stale.sort(key=lambda e: e.get("conf", 1))

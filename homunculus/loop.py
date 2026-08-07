@@ -129,8 +129,10 @@ class Runtime:
         }
         if (verb, h.get("target")) not in legal:
             return None
-        # Eating is one-shot: repeating it once consumed is never right.
-        if verb == "eat":
+        # One-shot acts must not be repeated reflexively: eating again once the
+        # food is gone is meaningless, and re-issuing an utterance without
+        # thinking makes the agent repeat itself verbatim.
+        if verb in ("eat", "say"):
             return None
         return h
 

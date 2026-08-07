@@ -28,13 +28,18 @@ class Observation:
     state: dict
 
 
-def observe(world, sense_radius: float = SENSE_RADIUS) -> list[Observation]:
-    """Everything the agent's senses deliver this tick, sorted by id."""
-    agent = world.entities["agent"]
+def observe(world, sense_radius: float = SENSE_RADIUS,
+            origin_id: str = "agent") -> list[Observation]:
+    """Everything this agent's senses deliver on this tick, sorted by id.
+
+    `origin_id` names whose senses these are, so several embodied minds can
+    perceive the same world from their own vantage points.
+    """
+    agent = world.entities[origin_id]
     origin = (agent.x, agent.y)
     out: list[Observation] = []
     for eid in sorted(world.entities):
-        if eid == "agent":
+        if eid == origin_id:
             continue
         e = world.entities[eid]
         r = dist(origin, (e.x, e.y))
