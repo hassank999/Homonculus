@@ -181,7 +181,7 @@ class World:
             f = self.entity_at(agent.x, agent.y, kinds={"food"})
             if f is not None and f.state.get("available", True):
                 f.state["available"] = False
-                f.state["respawn_at"] = t + 400
+                f.state["respawn_at"] = t + 200
                 consumed = f.id
         if (agent.x, agent.y) != before:
             moves.append({"id": "agent", "from": list(before), "to": [agent.x, agent.y]})

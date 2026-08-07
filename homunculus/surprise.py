@@ -23,7 +23,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 from . import dynamics as dyn
-from .geometry import polar_to_offset, quantization_var
+from .geometry import polar_to_offset, quantization_var, visible
 
 
 @dataclass
@@ -47,30 +47,48 @@ class SurpriseReport:
         }
 
 
+def dt_bucket(dt: int) -> int:
+    """Elapsed-time band. Calibration must be tracked per band, not just per
+    class: an entity can be well-modelled at short gaps and badly modelled at
+    long ones, and a single per-class scale is structurally blind to that —
+    short-gap samples vastly outnumber long-gap ones and drown the signal."""
+    if dt <= 2:
+        return 0
+    if dt <= 10:
+        return 1
+    if dt <= 50:
+        return 2
+    return 3
+
+
 class DriftModel:
-    """Online per-class calibration. Tracks mean normalized error; a class that
-    consistently exceeds 1.0 is overconfident and gets its assumed diffusion
-    scaled up. Cheap second-order learning, no training loop."""
+    """Online calibration, tracked per (class, elapsed-time band).
+
+    A band whose mean normalized error sits above 1 was overconfident, so its
+    assumed spread is scaled up; below 1, scaled down. Cheap second-order
+    learning with no training loop — the agent tunes its own expectations from
+    the errors it actually makes.
+    """
 
     def __init__(self):
-        self.stats: dict[str, list[float]] = defaultdict(list)
-        self.scale: dict[str, float] = defaultdict(lambda: 1.0)
+        self.stats: dict[tuple[str, int], list[float]] = defaultdict(list)
+        self.scale: dict[tuple[str, int], float] = defaultdict(lambda: 1.0)
 
-    def record(self, cls: str, normalized: float) -> None:
-        s = self.stats[cls]
+    def record(self, cls: str, dt: int, normalized: float) -> None:
+        s = self.stats[(cls, dt_bucket(dt))]
         s.append(normalized)
         if len(s) > 400:
             del s[:200]
 
     def update(self) -> None:
-        for cls, vals in self.stats.items():
-            if len(vals) < 40:
+        for key, vals in self.stats.items():
+            if len(vals) < 25:
                 continue
             mean = sum(vals) / len(vals)
-            if mean > 1.3:
-                self.scale[cls] = min(self.scale[cls] * 1.05, 8.0)
-            elif mean < 0.7:
-                self.scale[cls] = max(self.scale[cls] * 0.97, 0.25)
+            if mean > 1.15:
+                self.scale[key] = min(self.scale[key] * 1.06, 12.0)
+            elif mean < 0.8:
+                self.scale[key] = max(self.scale[key] * 0.97, 0.2)
 
     def expected(self, kind: str, dt: int, pose_var: float = 0.0,
                  obs_var: float = 0.0) -> float:
@@ -84,7 +102,8 @@ class DriftModel:
         world. Variances add; the scale factor is the learned correction.
         """
         d = dyn.for_kind(kind)
-        var = (d.expected_error(dt) * self.scale[dyn.class_of(kind)]) ** 2
+        key = (dyn.class_of(kind), dt_bucket(dt))
+        var = (d.expected_error(dt) * self.scale[key]) ** 2
         return math.sqrt(var + pose_var + obs_var)
 
 
@@ -125,7 +144,7 @@ def compute(wm, observations, tick: int, drift: DriftModel | None = None) -> Sur
             (dyn.class_of(b.kind), dt, raw, expected, baseline, b.track, b.kind,
              b.persistence)
         )
-        drift.record(dyn.class_of(b.kind), normalized)
+        drift.record(dyn.class_of(b.kind), dt, normalized)
         # Every re-sighting is a labelled example of whether this entity's
         # heading predicts it. Only meaningful once some time has elapsed.
         if dt >= 3 and dyn.class_of(b.kind) == "animate":
@@ -135,6 +154,12 @@ def compute(wm, observations, tick: int, drift: DriftModel | None = None) -> Sur
             rep.existence.append(f"~{oid}")
 
     # Things we confidently expected to see here and did not.
+    #
+    # This must require LINE OF SIGHT. Occlusion means "I could not see it", not
+    # "it is not there" — treating the two the same made the agent disconfirm
+    # food behind a wall and then starve because it no longer believed food
+    # existed anywhere.
+    here_cell = (int(round(px)), int(round(py)))
     for bid in sorted(wm.beliefs):
         if bid in obs_by_id:
             continue
@@ -142,8 +167,12 @@ def compute(wm, observations, tick: int, drift: DriftModel | None = None) -> Sur
         if proj is None or proj.conf < 0.6:
             continue
         r = math.hypot(proj.pos[0] - px, proj.pos[1] - py)
-        if r <= 4.0:                      # should have been comfortably in view
-            rep.existence.append(f"-{bid}")
+        if r > 4.0:                       # too far to conclude anything
+            continue
+        cell = (int(round(proj.pos[0])), int(round(proj.pos[1])))
+        if not visible(here_cell, cell, wm.walls):
+            continue                      # blocked view: learn nothing
+        rep.existence.append(f"-{bid}")
 
     vals = list(rep.spatial.values())
     spatial_term = max(vals) if vals else 0.0

@@ -112,21 +112,46 @@ def test_bump_is_felt_but_slip_is_not():
 
 
 def test_confabulation_decays_confidence_with_age():
-    """Unobserved beliefs must lose confidence, and animate ones must carry
-    ranked hypotheses rather than one collapsed point."""
+    """Unobserved beliefs must lose confidence as they age.
+
+    Tested by projecting forward rather than by waiting for the agent to
+    neglect something: a purposeful agent re-observes its surroundings
+    constantly, so relying on incidental staleness makes the test hostage to
+    the policy rather than to the mechanism under test.
+    """
     rt = Runtime(3)
-    for _ in range(1200):
+    for _ in range(600):
         rt.step()
-    views = rt.wm.entity_views(rt.tick, observed_ids=set())
-    assert views, "expected some beliefs"
-    aged = [v for v in views if v.age > 100]
-    assert aged, "expected at least one stale belief"
-    for v in aged:
-        assert 0.0 <= v.conf <= 1.0
-        assert v.observed is False
-    animate = [v for v in views if v.kind in ("critter", "resident") and v.age > 5]
-    for v in animate:
-        assert v.hypotheses, "animate beliefs should expose ranked hypotheses"
+    eids = sorted(rt.wm.beliefs)
+    assert eids, "expected some beliefs"
+
+    decayed = 0
+    for eid in eids:
+        near = rt.wm.resolve(eid, rt.tick)
+        far = rt.wm.resolve(eid, rt.tick + 5000)
+        assert 0.0 <= far.conf <= 1.0
+        if far.conf < near.conf:
+            decayed += 1
+        # Uncertainty must never shrink with time unobserved.
+        assert far.var >= near.var - 1e-9
+    assert decayed, "no belief lost confidence over 5000 unobserved ticks"
+
+
+def test_animate_beliefs_expose_ranked_hypotheses():
+    """A single collapsed point is dishonest for something that could be in
+    several places; animate projections carry ranked alternatives."""
+    rt = Runtime(3)
+    for _ in range(600):
+        rt.step()
+    animate = [
+        eid for eid, b in sorted(rt.wm.beliefs.items())
+        if b.kind in ("critter", "resident") and b.vel
+    ]
+    assert animate, "expected at least one tracked animate belief"
+    for eid in animate:
+        proj = rt.wm.resolve(eid, rt.tick + 40)
+        assert proj.hypotheses, f"{eid} produced no hypotheses"
+        assert abs(sum(w for _p, w in proj.hypotheses) - 1.0) < 0.35
 
 
 def test_resolve_is_pure():

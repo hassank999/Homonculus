@@ -4,6 +4,30 @@ Running log of progress after the plan was finalized. Newest first. The plan its
 
 ---
 
+## 2026-08-07 — P2 complete: drives and durative action
+
+22/22 tests green. The agent now has a body and sustains itself: mean energy **0.63**, warmth **0.66** (setpoints 0.75/0.70), 5–6 meals per 8000 ticks, across all seeds. Affect is computed from drive error, not injected.
+
+**Durative action works, and this is the number that matters for P3:** deliberation happens once every **~65 ticks**, up from every 6. A `goto` runs 40+ ticks against the *believed* map with zero decisions. Without this the surprise gate could never pay for itself.
+
+**Five bugs, each found by measurement rather than inspection.** Worth recording because every one was invisible in the code and obvious in the data:
+
+1. **Livelock, 715 collisions in one run.** `_step_goto` reset the stuck counter every time it *emitted* a move, so a wedged agent never reached the escape threshold. Progress, not emission, now clears it.
+2. **"Already there" read as "unreachable."** A*, asked to path to the cell you're standing on, returns a one-cell path; `path[1:]` is empty; `start()` marked it `FAILED: no_path`. The agent standing *on* food concluded it couldn't reach food.
+3. **Eating thin air, 225 times.** The `eat` commitment reported `DONE` unconditionally. The agent stood *beside* food, "ate" repeatedly, and starved. Now the world's verdict decides the outcome, and the policy requires standing on the exact cell.
+4. **Stale-belief starvation.** After eating both sources the agent believed no food existed and filtered them out forever — starving next to food that respawned 400 ticks later. Fixed by epistemic action: when you need something and believe none exists, go *look*.
+5. **Occlusion misread as absence.** Disconfirmation fired on anything expected-but-unseen, so food behind a wall was disconfirmed out of existence. Absence of evidence is only evidence *with line of sight*.
+
+**Two architectural additions earned by those failures**, both principled rather than patches:
+- **Bump-based localization.** A collision says "there is a wall in direction *d*" — combined with the known floorplan, that constrains where the agent can be. Snapping to the nearest consistent cell is how it recovers when no landmark is in view.
+- **Collision memory.** Cells recently bumped are treated as blocked for 60 ticks, so replanning routes around them instead of retrying the identical failing step. Collisions fell from ~3000 per run to under 10.
+
+**Drift model is now self-calibrating per (class, elapsed-time band).** A single per-class scale was structurally blind to Δt-dependent miscalibration — short-gap samples outnumber long-gap ones ~200:1 and drown the signal. Animate calibration spread went 4.21× → within tolerance.
+
+**World calibration, stated plainly:** drive rates, food density and respawn were tuned so that a *competent* policy can hold homeostasis and an inattentive one cannot. A fixture where even optimal play starves measures how fast the agent dies, not whether drives ground behaviour. The agent was not tuned to pass; the world was calibrated to be survivable.
+
+---
+
 ## 2026-08-07 — P1 complete: perception, belief, surprise. **H4 falsified.**
 
 12/12 tests green. The belief stack runs: egocentric polar sensing with occlusion, path integration, landmark re-localization with loop closure, lazy confabulation, and normalized surprise.

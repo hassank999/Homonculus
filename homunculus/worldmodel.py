@@ -35,6 +35,7 @@ class Belief:
     vel: tuple[float, float] | None = None       # EMA net velocity, animate only
     track: int = 0                                # consecutive sightings (velocity quality)
     persistence: float = 0.3                      # learned: does its heading predict?
+    disconfirmed: int = 0                         # times looked-for and not found
     fix_epoch: int = 0                            # which pose-fix era recorded it
 
 
@@ -64,6 +65,44 @@ class WorldModel:
         self.pose = (x + dx, y + dy, HEADING[action.dir])
         # Dead reckoning erodes confidence until a landmark fix restores it.
         self.pose_conf = max(0.0, self.pose_conf - 0.004)
+
+    def correct_from_bump(self, direction: str) -> bool:
+        """Re-localize using the collision itself.
+
+        A bump says: there is a wall immediately in direction `d`. If the agent
+        believes the cell ahead is clear, its POSE must be wrong — and since it
+        knows the floorplan, only some positions are consistent with hitting a
+        wall while facing that way. Snap to the nearest consistent one.
+
+        This is the difference between an agent that grinds against a wall
+        forever and one that recovers: without it, a run wedged out of landmark
+        sight bumped the same wall thousands of times.
+        """
+        from .world import DIRS
+
+        if direction not in DIRS or not self.walls:
+            return False
+        dx, dy = DIRS[direction]
+        cx, cy = int(round(self.pose[0])), int(round(self.pose[1]))
+        if (cx + dx, cy + dy) in self.walls:
+            return False                  # belief already consistent
+
+        best, bestd = None, 1e9
+        for ox in range(-2, 3):
+            for oy in range(-2, 3):
+                nx, ny = cx + ox, cy + oy
+                if (nx, ny) in self.walls:
+                    continue
+                if (nx + dx, ny + dy) not in self.walls:
+                    continue              # inconsistent: no wall to hit
+                d = ox * ox + oy * oy
+                if d < bestd:
+                    best, bestd = (nx, ny), d
+        if best is None:
+            return False
+        self.pose = (float(best[0]), float(best[1]), self.pose[2])
+        self.pose_conf = min(1.0, self.pose_conf + 0.15)
+        return True
 
     def apply_bump(self, action) -> None:
         """A bump is FELT. Proprioception tells the agent the move didn't happen,
@@ -143,11 +182,25 @@ class WorldModel:
                 # A velocity estimate is only trustworthy if it was built from
                 # continuous observation; a sighting after a long gap resets it.
                 track = prev.track + 1 if (tick - prev.last_seen) <= 2 else 0
+            # Seeing it again clears any accumulated disconfirmation.
             self.beliefs[o.id] = Belief(
                 id=o.id, kind=o.kind, pos=pos, last_seen=tick,
                 state=dict(o.state), vel=vel, track=track,
-                persistence=persistence, fix_epoch=self.fix_epoch,
+                persistence=persistence, disconfirmed=0,
+                fix_epoch=self.fix_epoch,
             )
+
+    def disconfirm(self, eid: str) -> None:
+        """Looked where it should be and it wasn't there.
+
+        Absence of evidence IS evidence here: the agent had a confident belief,
+        went and checked, and found nothing. Confidence must collapse, or the
+        agent re-checks the same empty spot forever — which is exactly what it
+        did before this existed.
+        """
+        b = self.beliefs.get(eid)
+        if b is not None:
+            b.disconfirmed += 1
 
     def learn_persistence(self, eid: str, rollout_err: float, baseline_err: float,
                           rate: float = 0.08) -> None:
@@ -217,7 +270,17 @@ class WorldModel:
         ctx = {"bounds": self.bounds, "persistence": b.persistence}
         if b.vel:
             ctx["vel"] = b.vel
-        return d.project(b, dt, traffic=self._traffic_near(b.pos), ctx=ctx)
+        proj = d.project(b, dt, traffic=self._traffic_near(b.pos), ctx=ctx)
+        if b.disconfirmed:
+            # Each failed check halves confidence, but capped: a fixed resource
+            # that has moved or been consumed should become uncertain, never
+            # cease to exist as a place worth re-checking.
+            proj = dyn.Projection(
+                pos=proj.pos, var=proj.var,
+                conf=proj.conf * (0.5 ** min(b.disconfirmed, 3)),
+                hypotheses=proj.hypotheses,
+            )
+        return proj
 
     def entity_views(self, tick: int, observed_ids: set[str]) -> list[EntityView]:
         """Render every belief into the Frame's egocentric polar form."""
@@ -230,7 +293,11 @@ class WorldModel:
                 continue
             age = tick - b.last_seen
             seen_now = eid in observed_ids
-            if not seen_now and proj.conf < 0.05:
+            # Fixed-location resources stay in the Frame even at low confidence:
+            # "I'm not sure there's still food there" is actionable, whereas
+            # forgetting the location entirely is not.
+            anchored = b.kind in ("food", "warmth", "landmark")
+            if not seen_now and proj.conf < (0.01 if anchored else 0.05):
                 continue                     # forgotten; falls out of the Frame
             r = dist((px, py), proj.pos)
             qr, qb = quantize(r, rel_bearing(abs_bearing((px, py), proj.pos), ph))

@@ -46,7 +46,9 @@ def build(name: str = "apartment") -> World:
         # Resources.
         Entity("food_a", "food", 4, 18, state={"available": True}),
         Entity("food_b", "food", 20, 9, state={"available": True}),
+        Entity("food_c", "food", 7, 4, state={"available": True}),
         Entity("warmth_a", "warmth", 18, 20),
+        Entity("warmth_b", "warmth", 3, 8),
         # Movable clutter.
         Entity("cup", "item", 8, 4),
         Entity("book", "item", 15, 15),
