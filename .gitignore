@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.env
+
+# Secrets — never commit the Together key
+*.key
+.env.local
+secrets.json
+
+# Run artifacts
+runs/
+*.jsonl
+scratch_runs*/
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
