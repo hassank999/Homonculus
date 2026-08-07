@@ -15,7 +15,7 @@ def main(argv=None) -> int:
     r = sub.add_parser("run", help="run the sim and write an event log")
     r.add_argument("--seed", type=int, default=42)
     r.add_argument("--ticks", type=int, default=1000)
-    r.add_argument("--scenario", default="room")
+    r.add_argument("--scenario", default="apartment")
     r.add_argument("--out", default="runs/latest/events.jsonl")
 
     args = p.parse_args(argv)
