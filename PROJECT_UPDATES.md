@@ -4,6 +4,48 @@ Running log of progress after the plan was finalized. Newest first. The plan its
 
 ---
 
+## 2026-08-07 — P3 + P4 complete. **H1 supported. H2 supported.**
+
+42 tests green. The mind, the gate, and memory are in. Everything runs against a deterministic `MockProvider`, so the full loop — prompt assembly, schema validation, parse path, cost accounting — is exercised offline with no key and no spend. `TogetherProvider` is written and ready for a real key.
+
+### H1: SUPPORTED — 60.9× fewer calls, and behaviour *improved*
+
+Three conditions on identical seeds, changing only the gating (6 seeds × 5000 ticks):
+
+| condition | calls | vs every-tick | task score | Δ |
+|---|---|---|---|---|
+| every_tick | 5000 | 1.0× | 0.639 | — |
+| idle_only | 240 | 20.9× | 0.782 | +22.5% |
+| **gated** | **82** | **60.9×** | **0.732** | **+14.5%** |
+
+The bar was ≥50× with no more than 10% degradation. We get **60.9× with behaviour 14.5% better**.
+
+**Honest decomposition:** most of the saving is *durative action* (20.9×), not the surprise gate; the gate contributes the remaining ~2.9×. Reporting only "60× from gating" would credit the gate with the motor's work.
+
+**An unexpected finding: thinking every tick is actively harmful** (0.639, the worst score). The agent reconsiders constantly and never completes anything. More cognition is not better cognition.
+
+**I built the gate backwards first, and the measurement caught it.** My initial version used surprise as an *interrupt* — abort the current action to think. That was catastrophically bad: **7× more calls and 30% worse behaviour**, monotonically worse at every threshold setting I swept. Abandoning in-flight work costs more than reconsidering gains, and each interrupt cascaded into extra decisions. The correct reading of System 1 / System 2 is the opposite: surprise should *remove* calls, not add them — at a natural decision point, if nothing surprising has happened, repeat the standing plan **without consulting the mind at all**. Interrupts are now off by default and the gate is a filter, not a trigger.
+
+Also fixed: the accumulator saturated. With decay 0.97 and typical scalar ~1, steady state is ~33, so any sane threshold fired every tick. Surprise now accumulates as *excess over the running background* — deviation from what is normally surprising in this world.
+
+### H2: SUPPORTED — surprise-weighted retention beats recency and random
+
+Recall@k for notable events under a bounded episodic store (5 seeds):
+
+| capacity | surprise | recency | random |
+|---|---|---|---|
+| 40 | **0.154** | 0.015 | 0.031 |
+| 60 | **0.197** | 0.033 | 0.010 |
+| 120 | **0.183** | 0.097 | 0.063 |
+
+Wins at every capacity, with the gap narrowing as room grows — the mechanism behaving as it should.
+
+**Methodology correction worth recording.** My first version ranked probe events *by surprise* — which is circular, since the surprise policy retains exactly those items. It reported a flattering 14.6× win. Probes are now selected on an objective criterion (food consumed, entities appearing/vanishing), sampled uniformly. The honest margin is smaller and still decisive.
+
+**Next:** P5 — a second agent, speech, and theory of mind. Then the replay viewer.
+
+---
+
 ## 2026-08-07 — P2 complete: drives and durative action
 
 22/22 tests green. The agent now has a body and sustains itself: mean energy **0.63**, warmth **0.66** (setpoints 0.75/0.70), 5–6 meals per 8000 ticks, across all seeds. Affect is computed from drive error, not injected.

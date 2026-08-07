@@ -44,7 +44,8 @@ def _run_start_event(seed: int, name: str, world, ticks: int, policy: str) -> di
 class Runtime:
     """Holds the whole stack for one run and advances it one tick at a time."""
 
-    def __init__(self, seed: int, scenario: str = "apartment", policy=None):
+    def __init__(self, seed: int, scenario: str = "apartment", policy=None,
+                 gate=None, governor=None, memory=None, sleep_every: int = 0):
         self.rng = HRng(seed)
         self.scenario = scenario
         self.world = scenario_mod.build(scenario)
@@ -59,6 +60,13 @@ class Runtime:
         self.soma = Soma()
         self.motor = Motor(self.wm)
         self.policy = policy or ReactivePolicy()
+        # No gate == consult the decision-maker whenever the motor is idle
+        # (the P2 behaviour). A gate additionally allows surprise and heartbeat
+        # to interrupt an action in progress.
+        self.gate = gate
+        self.governor = governor
+        self.memory = memory
+        self.sleep_every = sleep_every
         self.tick = 0
         self.last_action = None
         self.last_surprise = None
@@ -66,6 +74,12 @@ class Runtime:
         self.decisions = 0            # times the decision-maker was consulted
         self._last_choice = None
         self._repeat = 0
+        self._habit: dict | None = None      # the standing plan, re-issued reflexively
+        self.habits = 0                      # times acted without consulting
+
+        # A habit is only reusable while it remains legal and useful; these
+        # guards stop the agent repeating a plan the world has moved past.
+        self._habit_uses = 0
 
         obs = sensorium.observe(self.world)
         self.wm.ingest(obs, 0)
@@ -93,6 +107,33 @@ class Runtime:
         }
         return f
 
+    def _habit_if_legal(self) -> dict | None:
+        """The standing plan, if repeating it still makes sense.
+
+        A habit that is no longer available (the food is gone, the target is
+        forgotten) must not be executed blindly — reflexive action is cheap, not
+        free of judgement. Repeats are also capped so a habit cannot become an
+        infinite loop that never re-consults the mind.
+        """
+        h = self._habit
+        if h is None or self.frame is None:
+            return None
+        if self._habit_uses >= 6:
+            return None
+        verb = h.get("verb")
+        if verb == "wait":
+            return h
+        legal = {
+            (a["verb"], a.get("target"))
+            for a in self.frame.affordances
+        }
+        if (verb, h.get("target")) not in legal:
+            return None
+        # Eating is one-shot: repeating it once consumed is never right.
+        if verb == "eat":
+            return None
+        return h
+
     # --- one tick ---------------------------------------------------------
     def step(self) -> dict:
         self.tick += 1
@@ -101,7 +142,34 @@ class Runtime:
 
         # 1. Deliberate only when there is nothing already underway.
         decided = None
-        if not self.motor.busy():
+        reason = None
+        habit = self._habit_if_legal()
+        if self.gate is None:
+            open_now = None if self.motor.busy() else "idle"
+        else:
+            open_now = self.gate.should_open(t, self.motor.busy(), habit is not None)
+
+        if open_now is None and not self.motor.busy() and habit is not None:
+            # Reflexive re-issue: the body finished something, nothing surprising
+            # happened, so repeat the standing plan without thinking.
+            reason = "habit"
+            decided = habit
+            self.habits += 1
+            self._habit_uses += 1
+            c = self.motor.start(habit["verb"], habit.get("target"))
+            if habit.get("duration"):
+                c.meta["duration"] = habit["duration"]
+            open_now = None
+
+        elif open_now:
+            reason = open_now
+            if self.gate is not None:
+                self.gate.opened(t, open_now)
+                if open_now != "idle" and self.motor.busy():
+                    # Only reached when interrupts are explicitly enabled.
+                    self.motor.interrupt(open_now)
+            if self.governor is not None:
+                self.governor.acquire()
             choice = self.policy.choose(
                 self.frame, self.wm, self.soma, self.rng.stream("policy")
             )
@@ -121,6 +189,8 @@ class Runtime:
             c = self.motor.start(choice["verb"], choice.get("target"))
             if choice.get("duration"):
                 c.meta["duration"] = choice["duration"]
+            self._habit = dict(choice)
+            self._habit_uses = 0
 
         # 2. The commitment produces this tick's motor command.
         action = self.motor.step()
@@ -145,6 +215,10 @@ class Runtime:
 
         # 5. Compare before folding in.
         rep = surprise.compute(self.wm, obs, t, self.drift)
+        if self.gate is not None:
+            # Surprise accumulates between decisions: many small anomalies
+            # should eventually earn a thought even if none alone would.
+            self.gate.observe(rep.scalar)
         # Act on disconfirmation: anything confidently expected in view and not
         # seen loses confidence. Absence of evidence is evidence.
         for tag in rep.existence:
@@ -166,9 +240,18 @@ class Runtime:
         self.last_surprise = rep
         self.frame = self._build_frame({o.id for o in obs})
 
+        # 7. Remember. Write-through is selective: a tick that went exactly as
+        #    predicted taught the agent nothing worth storing.
+        if self.memory is not None:
+            self.memory.observe(t, self.frame, rep, ev)
+            if self.sleep_every and t % self.sleep_every == 0:
+                ev["sleep"] = self.memory.sleep(t)
+
         # Event record.
         if decided:
             ev["decision"] = decided
+            if reason:
+                ev["gate"] = reason
         if rep.scalar > 0.0:
             ev["surprise"] = rep.to_dict()
         if events:
