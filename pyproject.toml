@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "homunculus"
+version = "0.0.1"
+description = "An embodied prediction-error agent"
+requires-python = ">=3.11"
+dependencies = ["numpy"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+homunculus = "homunculus.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["homunculus*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
