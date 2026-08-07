@@ -1,0 +1,3 @@
+# Determinism-sensitive repo: normalize all text to LF on checkout everywhere,
+# so byte-identity guarantees never depend on the OS git runs on.
+* text=auto eol=lf
