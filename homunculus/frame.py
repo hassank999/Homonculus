@@ -24,6 +24,7 @@ class EntityView:
     conf: float             # 1.0 when directly observed; decays when remembered
     age: int                # ticks since last actually seen (0 = right now)
     observed: bool          # True = sensed this tick, False = confabulated
+    visits: float = 0.0     # how much time the agent has spent near it lately
     state: dict = field(default_factory=dict)
     # For animate entities, ranked alternatives instead of one collapsed point.
     hypotheses: list[dict] = field(default_factory=list)
@@ -37,6 +38,7 @@ class EntityView:
             "conf": round(self.conf, 3),
             "age": self.age,
             "observed": self.observed,
+            "visits": round(self.visits, 2),
         }
         if self.state:
             d["state"] = self.state

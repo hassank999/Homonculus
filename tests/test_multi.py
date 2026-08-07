@@ -37,28 +37,34 @@ def test_two_agents_both_survive():
 
 
 def test_agents_perceive_each_other():
-    rt = _rt(42)
-    seen = False
-    for _ in range(1500):
-        rt.step()
-        if any(v.id == "agent2" for v in rt.agents["agent"].frame.entities):
-            seen = True
-            break
-    assert seen, "agent never perceived agent2"
+    """Whether two wandering agents cross paths in a given run is chance, so
+    this asserts the capability across several seeds rather than demanding it
+    of one."""
+    seeds_with_contact = 0
+    for seed in (42, 2, 3, 7):
+        rt = _rt(seed)
+        for _ in range(2000):
+            rt.step()
+            if any(v.id == "agent2" for v in rt.agents["agent"].frame.entities):
+                seeds_with_contact += 1
+                break
+    assert seeds_with_contact >= 2, "agents essentially never perceive each other"
 
 
 def test_speech_reaches_only_those_in_earshot():
-    rt = _rt(42)
-    for _ in range(4000):
-        rt.step()
-    assert rt.utterances, "nobody ever spoke"
-    for u in rt.utterances:
-        listener = "agent2" if u.speaker == "agent" else "agent"
-        if u in rt.agents[listener].heard:
-            # If it was heard, the speakers were within hearing range at the time.
-            assert u.text
-    heard_total = sum(len(a.heard) for a in rt.agents.values())
-    assert heard_total < len(rt.utterances) * 2, "speech ignored distance entirely"
+    spoke, heard_total = 0, 0
+    for seed in (42, 1, 2, 3):
+        rt = _rt(seed)
+        for _ in range(3000):
+            rt.step()
+        spoke += len(rt.utterances)
+        heard_total += sum(len(a.heard) for a in rt.agents.values())
+        for u in rt.utterances:
+            assert u.text, "spoke without saying anything"
+            assert u.speaker in rt.agents
+    assert spoke, "nobody ever spoke across any seed"
+    # Every utterance reaches at most the one other agent, and only in earshot.
+    assert heard_total <= spoke, "speech ignored distance entirely"
 
 
 def test_speech_is_never_repeated_reflexively():
@@ -93,8 +99,11 @@ def test_h4_retest_rollout_still_does_not_beat_no_motion():
     mechanism should detect that rollout is not helping and collapse it toward
     the baseline rather than doing harm.
     """
+    # Agent-on-agent predictions across a real gap are scarce (the two are
+    # usually either in continuous view or nowhere near each other), so this
+    # needs several seeds to be stable rather than measuring sampling noise.
     roll, base = [], []
-    for seed in (1, 2, 42):
+    for seed in (1, 2, 3, 7, 42, 11, 5, 9):
         rt = _rt(seed)
         for _ in range(3000):
             rt.step()
@@ -102,10 +111,13 @@ def test_h4_retest_rollout_still_does_not_beat_no_motion():
                 if ag.last_surprise is None:
                     continue
                 for cls, dt, raw, _e, bl, _t, kind, _p in ag.last_surprise.samples:
+                    # Only agent-on-agent predictions across a real gap. When
+                    # the two are in continuous view every dt is 1, so these
+                    # samples are naturally scarce.
                     if cls == "animate" and dt >= 3 and kind == "agent":
                         roll.append(raw)
                         base.append(bl)
-    assert len(roll) > 50, "not enough agent-on-agent predictions to judge"
+    assert len(roll) >= 100, f"only {len(roll)} agent-on-agent predictions to judge"
     r, d = statistics.mean(roll), statistics.mean(base)
     assert r < d * 1.15, (
         f"rollout {r:.2f} much worse than no-motion {d:.2f} — persistence "

@@ -53,6 +53,52 @@ _HTML = """<!doctype html>
   .ev { max-height:210px; overflow:auto; }
   .ev div { padding:2px 0; border-bottom:1px solid #171b23; }
   .think { color:var(--think); }
+
+  /* conscious stream */
+  .stream { max-height:560px; overflow:auto; padding-right:4px; }
+  .entry { padding:8px 0 8px 12px; border-left:2px solid #232833; margin-bottom:2px;
+           opacity:.45; transition:opacity .15s; }
+  .entry.seen { opacity:1; }
+  .entry.now { background:#141922; border-left-color:#fff; }
+  .entry .t { color:var(--dim); font-size:11px; }
+  .entry .head { margin-top:1px; }
+  .entry .body { color:var(--dim); margin-top:2px; }
+  .entry .saw { color:#6f7681; margin-top:2px; font-size:12px; }
+  .entry .note { margin-top:4px; padding-left:8px; border-left:2px solid #2b3240;
+                 color:#cfd4dc; font-style:italic; }
+  .entry .exp { color:var(--dim); font-size:11px; margin-top:2px; }
+  .k-thought { border-left-color:var(--think); }
+  .k-thought .head { color:var(--think); }
+  .k-habit   { border-left-color:#2f3542; }
+  .k-outcome { border-left-color:var(--truth); }
+  .k-percept { border-left-color:var(--warm); }
+  .k-speech  { border-left-color:var(--food); }
+  .k-speech .head { color:var(--food); }
+  .k-sleep   { border-left-color:var(--lm); }
+  .filters { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px;
+             align-items:center; }
+  .filters label { color:var(--dim); cursor:pointer; user-select:none; }
+  .filters input { vertical-align:middle; margin-right:3px; }
+  .filters .spacer { flex:1; }
+  .counts { color:var(--dim); }
+  .counts b { color:var(--fg); font-weight:400; }
+
+  /* memory */
+  .mem { display:grid; grid-template-columns:1.6fr 1fr 1fr; gap:16px; }
+  @media (max-width:1000px){ .mem { grid-template-columns:1fr; } }
+  .mcol h3 { margin:0 0 8px; font-size:11px; letter-spacing:.08em;
+             text-transform:uppercase; color:var(--dim); font-weight:600; }
+  .mlist { max-height:300px; overflow:auto; }
+  .mitem { padding:6px 0 6px 10px; border-left:2px solid #232833;
+           border-bottom:1px solid #171b23; }
+  .mitem .mt { color:var(--dim); font-size:11px; }
+  .mitem.hot { border-left-color:var(--think); }
+  .mitem.recalled { border-left-color:var(--food); }
+  .mitem.gone { opacity:.32; border-left-color:#3a2020; text-decoration:line-through; }
+  .mitem .ents { color:#6f7681; font-size:11px; }
+  .mbar { color:var(--dim); margin-bottom:8px; }
+  .mbar b { color:var(--fg); font-weight:400; }
+  @media (max-width:900px){ .wrap { grid-template-columns:1fr; } }
 </style>
 <header>
   <h1>Homunculus — replay</h1>
@@ -83,8 +129,31 @@ _HTML = """<!doctype html>
   <div>
     <div class="panel"><h2>body</h2><div id="drives"></div></div>
     <div class="panel" style="margin-top:14px"><h2>state</h2><div id="state"></div></div>
-    <div class="panel" style="margin-top:14px"><h2>recent decisions</h2>
-      <div class="ev" id="events"></div></div>
+  </div>
+</div>
+<div style="padding:0 18px 24px">
+  <div class="panel">
+    <h2>conscious stream</h2>
+    <div class="filters" id="filters"></div>
+    <div class="stream" id="stream"></div>
+  </div>
+  <div class="panel" id="memPanel" style="margin-top:18px; display:none">
+    <h2>memory</h2>
+    <div class="mbar" id="mbar"></div>
+    <div class="mem">
+      <div class="mcol">
+        <h3>episodic</h3>
+        <div class="mlist" id="memEpisodic"></div>
+      </div>
+      <div class="mcol">
+        <h3>semantic</h3>
+        <div class="mlist" id="memSemantic"></div>
+      </div>
+      <div class="mcol">
+        <h3>procedural</h3>
+        <div class="mlist" id="memProcedural"></div>
+      </div>
+    </div>
   </div>
 </div>
 <script>
@@ -136,15 +205,127 @@ function draw(i){
     ['valence', f.v.toFixed(2)], ['thoughts so far', f.nd],
   ].map(([k,v]) => `<div class="row"><span>${k}</span><span>${v}</span></div>`).join('');
 
-  const recent = D.decisions.filter(d => d[0] <= f.t).slice(-14).reverse();
-  document.getElementById('events').innerHTML = recent.map(d =>
-    `<div><span class="${d[2]==='idle'?'':'think'}">t${d[0]}</span> ${d[1]}
-     <span style="color:var(--dim)">${d[2]}</span></div>`).join('') ||
-    '<div style="color:var(--dim)">none yet</div>';
-
   document.getElementById('tickLabel').textContent = `t ${f.t} / ${D.frames[N-1].t}`;
   drawTrace(i);
+  syncStream(f.t);
+  renderMemory(f.t);
 }
+
+/* ---- memory ---------------------------------------------------------- */
+function renderMemory(t){
+  const M = D.memory;
+  if (!M) return;
+  document.getElementById('memPanel').style.display = '';
+
+  // What the agent HELD at tick t: stored by then, not yet forgotten.
+  const held = M.episodic.filter(e => e.t <= t && (e.gone === null || e.gone > t));
+  const lost = M.episodic.filter(e => e.gone !== null && e.gone <= t);
+  const maxS = Math.max(1, ...held.map(e => e.s));
+
+  document.getElementById('mbar').innerHTML =
+    `<b>${held.length}</b>/${M.capacity} episodes held · ` +
+    `<b>${lost.length}</b> forgotten · policy <b>${M.policy}</b> · ` +
+    `<b>${M.semantic.filter(f=>f.first<=t).length}</b> facts`;
+
+  // Most surprising first — the ones the policy is keeping on purpose.
+  const shownEp = held.slice().sort((a,b) => b.s - a.s).slice(0, 60);
+  const recentlyLost = lost.slice(-8).reverse();
+  document.getElementById('memEpisodic').innerHTML =
+    shownEp.map(e => {
+      const recalled = e.lastRecall !== null && e.lastRecall <= t;
+      const cls = recalled ? 'recalled' : (e.s >= maxS * 0.6 ? 'hot' : '');
+      return `<div class="mitem ${cls}">
+        <div class="mt">t${e.t} · surprise ${e.s}${recalled ? ' · recalled' : ''}</div>
+        <div>${esc(e.text)}</div>
+        ${e.ents.length ? `<div class="ents">${esc(e.ents.join(' '))}</div>` : ''}
+      </div>`;
+    }).join('') +
+    recentlyLost.map(e => `<div class="mitem gone">
+        <div class="mt">t${e.t} · forgotten at t${e.gone}</div>
+        <div>${esc(e.text)}</div>
+      </div>`).join('') ||
+    '<div style="color:var(--dim)">nothing stored yet</div>';
+
+  const facts = M.semantic.filter(f => f.first <= t);
+  document.getElementById('memSemantic').innerHTML = facts.map(f =>
+    `<div class="mitem">
+       <div class="mt">learned t${f.first} · support ${f.support}</div>
+       <div>${esc(f.text)}</div>
+     </div>`).join('') ||
+    '<div style="color:var(--dim)">no facts distilled yet</div>';
+
+  document.getElementById('memProcedural').innerHTML = M.procedural.map(p =>
+    `<div class="mitem">
+       <div class="mt">when ${esc(p.situation)}</div>
+       <div>${esc(p.verb)}${p.target ? ' ' + esc(p.target) : ''}
+         <span style="color:var(--dim)">${p.wins}/${p.n} worked</span></div>
+     </div>`).join('') ||
+    '<div style="color:var(--dim)">nothing learned yet</div>';
+}
+
+/* ---- conscious stream ---------------------------------------------- */
+const KINDS = ['thought','habit','outcome','percept','speech','sleep'];
+const shown = new Set(['thought','outcome','percept','speech','sleep']);
+const esc = s => (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+const counts = {};
+for (const e of D.stream) counts[e.kind] = (counts[e.kind]||0) + 1;
+document.getElementById('filters').innerHTML =
+  KINDS.filter(k => counts[k]).map(k =>
+    `<label><input type="checkbox" data-k="${k}" ${shown.has(k)?'checked':''}>` +
+    `${k} <span style="color:var(--dim)">${counts[k]}</span></label>`
+  ).join('') +
+  `<span class="spacer"></span><span class="counts">` +
+  `<b>${counts.thought||0}</b> thoughts · <b>${counts.habit||0}</b> habitual · ` +
+  `${D.frames[D.frames.length-1].t} ticks</span>`;
+document.getElementById('filters').onchange = e => {
+  const k = e.target.dataset.k;
+  e.target.checked ? shown.add(k) : shown.delete(k);
+  renderStream(); syncStream(D.frames[+scrub.value].t);
+};
+
+function renderStream(){
+  document.getElementById('stream').innerHTML = D.stream
+    .map((e,i) => shown.has(e.kind) ? `
+      <div class="entry k-${e.kind}" data-t="${e.t}" data-i="${i}">
+        <div class="t">t${e.t} · ${e.kind}</div>
+        <div class="head">${esc(e.head)}</div>
+        ${e.body ? `<div class="body">${esc(e.body)}</div>` : ''}
+        ${e.saw ? `<div class="saw">saw: ${esc(e.saw)}</div>` : ''}
+        ${e.note ? `<div class="note">${esc(e.note)}</div>` : ''}
+        ${e.expect ? `<div class="exp">expected surprise: ${esc(e.expect)}</div>` : ''}
+      </div>` : '').join('') || '<div style="color:var(--dim)">nothing yet</div>';
+}
+
+// Click any stream entry to jump the whole view to that moment.
+document.getElementById('stream').addEventListener('click', ev => {
+  const el = ev.target.closest('.entry');
+  if (!el) return;
+  const t = +el.dataset.t;
+  let best = 0, bd = Infinity;
+  D.frames.forEach((f,i) => { const d = Math.abs(f.t - t); if (d < bd){ bd=d; best=i; } });
+  scrub.value = best; draw(best);
+});
+
+let lastNow = null;
+function syncStream(t){
+  const box = document.getElementById('stream');
+  let current = null;
+  for (const el of box.querySelectorAll('.entry')){
+    const et = +el.dataset.t;
+    el.classList.toggle('seen', et <= t);
+    el.classList.remove('now');
+    if (et <= t) current = el;
+  }
+  if (current && current !== lastNow){
+    current.classList.add('now');
+    // Keep the newest entry in view without hijacking manual scrolling.
+    const top = current.offsetTop - box.clientHeight * 0.6;
+    box.scrollTo({top: Math.max(0, top), behavior: 'smooth'});
+    lastNow = current;
+  } else if (current) current.classList.add('now');
+}
+renderStream();
 
 function drawTrace(cur){
   tr.fillStyle='#0b0d11'; tr.fillRect(0,0,640,110);
@@ -178,14 +359,33 @@ document.getElementById('play').onclick = () => {
   }, 40); else clearInterval(timer);
 };
 scrub.oninput = () => draw(+scrub.value);
+
+// Arrow keys scrub; shift jumps ten frames at a time.
+addEventListener('keydown', e => {
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  const step = (e.shiftKey ? 10 : 1) * (e.key === 'ArrowRight' ? 1 : -1);
+  const i = Math.min(N-1, Math.max(0, +scrub.value + step));
+  scrub.value = i; draw(i); e.preventDefault();
+});
+
+// Clicking the surprise trace seeks to that point in the run.
+document.getElementById('trace').addEventListener('click', e => {
+  const r = e.target.getBoundingClientRect();
+  const i = Math.round((e.clientX - r.left) / r.width * (N - 1));
+  scrub.value = Math.min(N-1, Math.max(0, i)); draw(+scrub.value);
+});
+
 draw(0);
 </script>
 """
 
 
 def build(events: list[dict], out_path, stride: int = 1,
-          model: str | None = None) -> Path:
+          model: str | None = None, max_stream: int = 1200,
+          memory=None) -> Path:
     """Render an event log to a standalone HTML file."""
+    from .narrate import stream as narrate_stream
+
     start = next(e for e in events if e["type"] == "run_start")
     ticks = [e for e in events if e["type"] == "tick"]
     kinds = {e["id"]: e["kind"] for e in start["entities"]}
@@ -221,12 +421,22 @@ def build(events: list[dict], out_path, stride: int = 1,
             "ents": [[i, p[0], p[1]] for i, p in sorted(pos.items())],
         })
 
+    entries = narrate_stream(events)
+    if len(entries) > max_stream:
+        # Keep the thinking; habitual repetition is what gets dropped first.
+        rank = {"thought": 0, "speech": 1, "sleep": 1, "percept": 2,
+                "outcome": 3, "habit": 4}
+        keep = sorted(entries, key=lambda e: (rank.get(e["kind"], 5), e["t"]))
+        entries = sorted(keep[:max_stream], key=lambda e: e["t"])
+
     data = {
         "seed": start.get("seed"), "scenario": start.get("scenario"),
         "policy": start.get("policy", "?"), "model": model,
         "w": start["config"]["w"], "h": start["config"]["h"],
         "walls": start["walls"], "kinds": kinds,
         "frames": frames, "decisions": decisions, "tickIndex": tick_index,
+        "stream": entries,
+        "memory": memory.export() if memory is not None else None,
     }
     html = _HTML.replace("__DATA__", json.dumps(data, separators=(",", ":")))
     p = Path(out_path)

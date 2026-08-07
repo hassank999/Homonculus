@@ -99,8 +99,11 @@ class MultiRuntime:
         self.tick = 0
         self.utterances: list[Utterance] = []
 
-        # Add a second embodied agent to the shared world.
-        self.world.entities["agent2"] = Entity("agent2", "agent", 18, 6, heading=180.0)
+        # The second agent shares the FIRST agent's half of the apartment.
+        # Placed across the partition it never met the first one: each half is
+        # self-sufficient in food, warmth and landmarks, so neither had any
+        # reason to cross and P5 had nothing to observe.
+        self.world.entities["agent2"] = Entity("agent2", "agent", 5, 17, heading=270.0)
 
         lm = scenario_mod.landmarks(self.world)
         self.agents: dict[str, Agent] = {}
@@ -135,7 +138,7 @@ class MultiRuntime:
             valence=ag.soma.valence,
             arousal=ag.soma.arousal,
             entities=views,
-            affordances=affordances(ag.wm, views, self.tick),
+            affordances=affordances(ag.wm, views, self.tick, unavailable=ag.motor._failed),
             events=[{"kind": "heard", **u.to_dict()} for u in ag.heard[-3:]],
         )
         # Speech is an affordance only when there is someone plausibly in

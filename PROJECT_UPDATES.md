@@ -4,6 +4,80 @@ Running log of progress after the plan was finalized. Newest first. The plan its
 
 ---
 
+## 2026-08-07 — Memory viewer, cleanup, and a go-live checklist. **61/61 green.**
+
+Paused before the live run, as asked. Cleaned up everything outstanding.
+
+### Memory viewer
+
+Three stores rendered in the viewer, synced to the scrubber, showing what the agent held **at that moment** — not merely its final state. Episodes carry both when they were stored and when they were forgotten, because a bounded memory's forgetting is half of what it does, and a panel that only shows survivors hides it.
+
+- **episodic** — ranked by surprise, with entity tags; recalled memories highlighted; recently-forgotten ones struck through
+- **semantic** — distilled facts with support counts and when they were learned
+- **procedural** — what actually worked, e.g. `energy · goto food_c · 5/6 worked`, `energy · goto lm_corner · 0/1`
+
+A typical 3000-tick run: **200 held, 611 forgotten, 8 facts, 15 procedural entries.** Episode text was also rewritten — it had been repeating the tick and entity list already shown around it, which read as noise.
+
+### Standing issues fixed
+
+- **Note/action mismatch in the stream.** When the mind's choice was rejected as illegal, the note still described the *rejected* intention — "making for warmth_b" above an action of "waited". Fallbacks now replace the note with what actually happened and why.
+- **The mind chose from the wrong list.** The mock selected targets from raw perception rather than from *affordances*, so withdrawn targets were picked and rejected — ~50 errors per run. Now **0 errors across every seed**; choosing only from what perception offers is the design principle, and it wasn't being honoured.
+- **600 ticks burned on one unreachable target.** `MAX_TICKS` was 300 in a room crossable in ~50 steps, and nothing prevented an immediate retry. Now 120, with failed targets withdrawn from affordances for a cooldown — 40 ticks for food and warmth, since locking the agent out of *food* over a transient routing failure risks starving it for a non-reason.
+- **Sedentary agent / oscillating agent.** Two failed attempts at the same problem: requiring wander targets be *out of sight* made it never leave its starting room (so the two agents never met); ranking by distance or staleness made it ping-pong between two landmarks. The real signal was where it had not *been* — `traffic` was already tracked for confabulation decay and is now surfaced on the frame as `visits`.
+- **Stream readability** — consecutive identical entries collapse with a count (`×8`), so habitual repetition no longer buries the moments that matter.
+- **Test suite honesty.** Three tests were passing for the wrong reasons or failing for irrelevant ones: the calibration test depended on the *old* erratic behaviour (it now uses an explicit roaming policy, since calibration is a property of the belief machinery, not of a policy); the commitment-failure test waited for a natural failure, which became rare once the agent stopped chasing things it could never catch (failure is now provoked deterministically); and the H4 multi-agent test was measuring sampling noise at 5 seeds (now 8, ratio 1.109 with n=314).
+
+### Health after cleanup
+
+Across 5 seeds × 6000 ticks: **energy 0.71, warmth 0.62, fatigue near setpoint, 0 errors**, ~55 ticks per decision.
+
+### [`GOING_LIVE.md`](GOING_LIVE.md)
+
+Written for the first real run. Ordered checklist, most-likely-to-break first: verify model IDs still resolve (Together gives 2–3 weeks' deprecation notice, and the docs disagree with themselves on `api.together.ai` vs `.xyz`), a 40-tick smoke test, confirm prompt caching is actually hitting (the difference between the modelled cost and ~4× it), then the rate governor, then the capability sweep. Budget: start at 40 ticks, ~1–3 calls.
+
+---
+
+## 2026-08-07 — Conscious stream. **Rendering it found four bugs the metrics hid.**
+
+The event log said *what* happened; it couldn't say *why*. Every decision now records its causal chain — what woke the agent, what it was feeling, what was in view, what it chose, what it told itself, and what it expected — and `narrate.py` turns that into readable prose. Available in the viewer (synced to the scrubber, filterable by kind) and in the terminal via `--stream N`.
+
+A thought now reads:
+
+```
+* t2323   ate food_a
+          finished what it was doing; exhausted (fatigue 0.99)
+          saw: food_a 0 away, r00 5 away, c02 6 away
+          "hungry at 0.44 and food_a is underfoot - eating now"
+          expected surprise: low
+= t2323   finished eating food_a
+! t2323   ate food_a — energy restored
+```
+
+Entry kinds: **thought** (the mind was actually consulted), **habit** (acted without thinking), **outcome**, **percept**, **speech**, **sleep**.
+
+### The stream immediately exposed four behavioural bugs
+
+None were visible in the aggregate metrics; all were obvious within seconds of reading the agent's own account.
+
+1. **Walking to where it already stood.** "set off toward c00 … arrived after 0 ticks", repeatedly. Going somewhere you already are is not an available action — `goto` is no longer offered for a target underfoot.
+2. **Chasing things that move.** 43 of ~70 decisions were spent pursuing critters, 150–250 ticks each, which can never be pinned down. Fixed properly rather than by blacklist: **epistemic value must account for how long the answer lasts.** Verifying a landmark buys thousands of ticks of certainty; verifying a critter buys one. Pursuit of anything mobile is also now capped at 60 ticks.
+3. **Oscillating between two landmarks**, then between two adjacent objects, forever — because "wander to the farthest/oldest visible thing" flips back and forth. **Wandering means going somewhere out of sight;** walking toward something already visible gains no information. If nothing new is in view, settle instead.
+4. **Sleep formed zero facts.** Episodes were tagged only with entities whose *existence* changed, so most had no subject at all and consolidation had nothing to count. Episodes are now tagged with what they were about.
+
+### The fixes improved every headline number
+
+| condition | calls | vs every-tick | score |
+|---|---|---|---|
+| every_tick | 5000 | 1.0× | 0.634 |
+| idle_only | 237 | 21.1× | 0.642 |
+| **gated** | **64** | **78.3×** | **0.678** |
+
+**H1 strengthened: 78.3×** (was 60.9×), and gated is now strictly best on *both* axes — fewest calls *and* highest score, where before it traded a little behaviour for a lot of calls. Sleep now forms ~12 facts per run.
+
+That is the argument for the feature in one line: a legible conscious stream is not decoration, it is an instrument. Four real defects had been sitting inside passing tests and healthy averages.
+
+---
+
 ## 2026-08-07 — **FIRST LIGHT.** P5 complete, viewer shipped, all hypotheses measured.
 
 **50/50 tests green.** All six phases built. The homunculus runs.

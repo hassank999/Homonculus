@@ -79,7 +79,16 @@ class Commitment:
 class Motor:
     """Owns the current commitment and turns it into one Action per tick."""
 
-    MAX_TICKS = 300
+    # A 24x24 room needs ~50 steps to cross. 300 was long enough to burn two
+    # full attempts (600 ticks) on one unreachable target before giving up.
+    MAX_TICKS = 120
+    CHASE_TICKS = 60          # cap on pursuing something that moves
+    RETRY_COOLDOWN = 150      # ticks before re-attempting a target that failed
+    # Essentials get a much shorter cooldown: locking the agent out of food for
+    # hundreds of ticks over one transient routing failure risks starving it
+    # for a reason that has nothing to do with the world.
+    ESSENTIAL_COOLDOWN = 40
+    ESSENTIAL_KINDS = frozenset({"food", "warmth"})
 
     def __init__(self, wm):
         self.wm = wm
@@ -90,6 +99,7 @@ class Motor:
         self._last_dir = "N"
         self._last_target_cell: tuple[int, int] | None = None
         self._blocked: dict[tuple[int, int], int] = {}
+        self._failed: dict[str, int] = {}
         self.tick = 0
         self.outcomes: dict[str, int] = {}
 
@@ -103,6 +113,8 @@ class Motor:
         self._path = []
         self._stuck = 0
         if verb == "goto" and target:
+            # Don't immediately re-attempt something that just failed; without
+            # this the agent burned attempt after attempt on the same target.
             goal = self._target_cell(target)
             here = (int(round(self.wm.pose[0])), int(round(self.wm.pose[1])))
             if goal is not None and goal == here:
@@ -123,6 +135,12 @@ class Motor:
             self.current.reason = reason
 
     # --- planning ---------------------------------------------------------
+    def _target_moves(self, target: str | None) -> bool:
+        if not target:
+            return False
+        b = self.wm.beliefs.get(target)
+        return b is not None and b.kind in ("critter", "resident", "agent")
+
     def _believed_passable(self, cell) -> bool:
         if cell in self.wm.walls:
             return False
@@ -175,9 +193,19 @@ class Motor:
 
         c.ticks += 1
         self.tick += 1
-        if c.ticks > self.MAX_TICKS:
+        # Chasing something that relocates gets a much shorter leash: a pursuit
+        # that has not succeeded in ~60 ticks is unlikely to, and the ticks are
+        # better spent elsewhere.
+        limit = self.CHASE_TICKS if self._target_moves(c.target) else self.MAX_TICKS
+        if c.ticks > limit:
             c.status = FAILED
             c.reason = "timeout"
+            if c.target:
+                b = self.wm.beliefs.get(c.target)
+                cool = (self.ESSENTIAL_COOLDOWN
+                        if b is not None and b.kind in self.ESSENTIAL_KINDS
+                        else self.RETRY_COOLDOWN)
+                self._failed[c.target] = self.tick + cool
             return Action("wait")
 
         if c.verb == "wait":
@@ -290,7 +318,7 @@ class Motor:
                 self.current.reason = "blocked"
 
 
-def affordances(wm, frame_entities, tick: int) -> list[dict]:
+def affordances(wm, frame_entities, tick: int, unavailable=None) -> list[dict]:
     """What can actually be done right now, generated from perception.
 
     This is Gibsonian: the action space is produced by what is present, not
@@ -298,13 +326,23 @@ def affordances(wm, frame_entities, tick: int) -> list[dict]:
     """
     out: list[dict] = [{"verb": "wait"}]
     here = (int(round(wm.pose[0])), int(round(wm.pose[1])))
+    # Targets that recently proved unreachable are simply not offered. Failing
+    # them at start time instead burned a decision every attempt.
+    blocked_targets = {
+        t for t, until in (unavailable or {}).items() if until > tick
+    }
     for v in frame_entities:
         b = wm.beliefs.get(v.id)
-        if b is None:
+        if b is None or v.id in blocked_targets:
             continue
         cell = (int(round(b.pos[0])), int(round(b.pos[1])))
         if b.kind in ("food", "warmth", "item", "landmark", "critter", "resident"):
-            out.append({"verb": "goto", "target": v.id})
+            # Going to where you already stand is not an available action. Left
+            # in, the agent repeatedly "set off toward" something underfoot and
+            # arrived in zero ticks — a loop invisible in the metrics and
+            # obvious the moment the stream was rendered.
+            if cell != here:
+                out.append({"verb": "goto", "target": v.id})
         if b.kind == "food" and cell == here and b.state.get("available", True):
             out.append({"verb": "eat", "target": v.id})
     # Stable order so prompts (and caches) don't churn.

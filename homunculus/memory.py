@@ -70,6 +70,12 @@ class Episode:
     entities: tuple = ()
     vec: list = field(default_factory=list)
     retrievals: int = 0
+    # When this memory was lost, if it was. Kept so the viewer can show what the
+    # agent remembered AT A GIVEN MOMENT, including what it has since forgotten
+    # — a store that only reports its final contents hides the forgetting, which
+    # is the interesting half of a bounded memory.
+    evicted_at: int | None = None
+    last_recalled: int | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -84,6 +90,7 @@ class Fact:
     text: str
     support: int = 1
     last_tick: int = 0
+    first_tick: int = 0
 
 
 class EpisodicStore:
@@ -99,30 +106,46 @@ class EpisodicStore:
         self.policy = policy
         self.embed = embedder or Embedder()
         self.items: list[Episode] = []
+        self.history: list[Episode] = []      # every episode ever stored
         self._rng = random.Random(seed)
+        self._now = 0
 
     def add(self, tick: int, text: str, surprise: float, entities=()) -> Episode:
+        self._now = tick
         ep = Episode(tick, text, surprise, tuple(entities), self.embed(text))
         self.items.append(ep)
+        self.history.append(ep)
         if len(self.items) > self.capacity:
             self._evict()
         return ep
+
+    def _mark_evicted(self, kept: list[Episode]) -> None:
+        keep = {id(e) for e in kept}
+        for e in self.items:
+            if id(e) not in keep and e.evicted_at is None:
+                e.evicted_at = self._now
 
     def _evict(self) -> None:
         over = len(self.items) - self.capacity
         if over <= 0:
             return
         if self.policy == "recency":
-            self.items = self.items[over:]
-        elif self.policy == "random":
+            kept = self.items[over:]
+            self._mark_evicted(kept)
+            self.items = kept
+            return
+        if self.policy == "random":
             for _ in range(over):
-                self.items.pop(self._rng.randrange(len(self.items)))
-        else:
-            # Keep what was hardest to predict. Ties break toward recent so a
-            # long-settled world does not freeze its store permanently.
-            self.items.sort(key=lambda e: (e.surprise, e.tick))
-            self.items = self.items[over:]
-            self.items.sort(key=lambda e: e.tick)
+                gone = self.items.pop(self._rng.randrange(len(self.items)))
+                if gone.evicted_at is None:
+                    gone.evicted_at = self._now
+            return
+        # Keep what was hardest to predict. Ties break toward recent so a
+        # long-settled world does not freeze its store permanently.
+        self.items.sort(key=lambda e: (e.surprise, e.tick))
+        kept = self.items[over:]
+        self._mark_evicted(kept)
+        self.items = sorted(kept, key=lambda e: e.tick)
 
     def retrieve(self, query: str, tick: int, k: int = 4,
                  half_life: float = 3000.0) -> list[Episode]:
@@ -141,6 +164,7 @@ class EpisodicStore:
         top = [ep for _s, ep in scored[:k]]
         for ep in top:
             ep.retrievals += 1
+            ep.last_recalled = tick
         return top
 
     def covers(self, tick: int, tol: int = 0) -> bool:
@@ -156,7 +180,7 @@ class SemanticStore:
     def assert_fact(self, text: str, tick: int) -> None:
         f = self.facts.get(text)
         if f is None:
-            self.facts[text] = Fact(text, 1, tick)
+            self.facts[text] = Fact(text, 1, tick, tick)
         else:
             f.support += 1
             f.last_tick = tick
@@ -224,33 +248,45 @@ class Memory:
             or surprise.existence
         )
         if notable:
+            # Tag the episode with what it was ABOUT: anything whose existence
+            # changed, plus what was actually in view. Tagging only existence
+            # changes left most episodes with no subject at all, so
+            # consolidation had nothing to count and produced zero facts.
+            subjects = {t[1:] for t in surprise.existence if t[:1] in "+-~"}
+            subjects.update(e.id for e in frame.entities if e.observed)
+            if event.get("consumed"):
+                subjects.add(event["consumed"])
             self.episodic.add(
                 tick, self._describe(tick, frame, surprise, event),
-                surprise.scalar,
-                entities=tuple(sorted(
-                    t[1:] for t in surprise.existence if t[:1] in "+-~"
-                )),
+                surprise.scalar, entities=tuple(sorted(subjects)),
             )
 
     @staticmethod
     def _describe(tick: int, frame, surprise, event: dict) -> str:
-        bits = [f"t{tick}"]
-        act = event.get("action") or {}
-        if act.get("verb"):
-            bits.append(act["verb"])
-        if act.get("target"):
-            bits.append(act["target"])
+        """A short human-readable account of the episode.
+
+        Deliberately excludes the tick and the nearby-entity list: both are
+        carried as structured fields, and repeating them here made the stored
+        memories read as noise in the viewer.
+        """
+        bits = []
         if event.get("consumed"):
             bits.append(f"ate {event['consumed']}")
-        if event.get("blocked"):
-            bits.append("blocked")
         for tag in surprise.existence:
-            kind = {"+": "appeared", "-": "missing", "~": "changed"}.get(tag[0], "")
-            bits.append(f"{tag[1:]} {kind}")
-        near = [e.id for e in frame.entities if e.observed][:4]
-        if near:
-            bits.append("near " + " ".join(sorted(near)))
-        return " ".join(bits)
+            what = tag[1:]
+            how = {"+": "appeared", "-": "was missing", "~": "changed"}.get(tag[0])
+            if how:
+                bits.append(f"{what} {how}")
+        if event.get("blocked"):
+            bits.append("bumped into something")
+        if not bits:
+            act = event.get("action") or {}
+            verb = act.get("verb") or "acted"
+            near = sorted(e.id for e in frame.entities if e.observed)[:3]
+            bits.append(
+                f"{verb} near {', '.join(near)}" if near else f"{verb} alone"
+            )
+        return "; ".join(bits)
 
     def sleep(self, tick: int) -> dict:
         """Offline consolidation: distil repeated episodes into facts.
@@ -265,9 +301,12 @@ class Memory:
             for ent in ep.entities:
                 counts[ent] = counts.get(ent, 0) + 1
         made = 0
+        total = max(len(self.episodic.items), 1)
         for ent, n in sorted(counts.items()):
-            if n >= 3:
-                self.semantic.assert_fact(f"{ent} is often surprising", tick)
+            # A fact needs repetition AND prominence: something present in a
+            # decent share of what was worth remembering.
+            if n >= 3 and n / total >= 0.25:
+                self.semantic.assert_fact(f"{ent} figures in what surprises me", tick)
                 made += 1
         blocked = sum(1 for r in self.working if r.get("blocked"))
         if blocked > self.working_size // 3:
@@ -277,3 +316,38 @@ class Memory:
 
     def recall(self, query: str, tick: int, k: int = 3) -> list[Episode]:
         return self.episodic.retrieve(query, tick, k)
+
+    def export(self) -> dict:
+        """Everything needed to reconstruct memory AS IT WAS at any tick.
+
+        Episodes carry both when they were stored and when they were forgotten,
+        so a viewer can show the store's contents at a moment rather than only
+        its final state — the forgetting is half of what a bounded memory does.
+        """
+        return {
+            "capacity": self.episodic.capacity,
+            "policy": self.episodic.policy,
+            "episodic": [
+                {
+                    "t": e.tick,
+                    "text": e.text,
+                    "s": round(e.surprise, 2),
+                    "ents": list(e.entities)[:6],
+                    "gone": e.evicted_at,
+                    "recalls": e.retrievals,
+                    "lastRecall": e.last_recalled,
+                }
+                for e in self.episodic.history
+            ],
+            "semantic": [
+                {"text": f.text, "support": f.support,
+                 "first": f.first_tick, "last": f.last_tick}
+                for f in sorted(self.semantic.facts.values(),
+                                key=lambda f: (f.first_tick, f.text))
+            ],
+            "procedural": [
+                {"situation": k[0], "verb": k[1], "target": k[2],
+                 "n": v[0], "wins": v[1]}
+                for k, v in sorted(self.procedural.stats.items())
+            ],
+        }

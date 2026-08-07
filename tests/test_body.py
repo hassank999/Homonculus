@@ -56,9 +56,7 @@ def test_deliberation_is_rare_because_action_is_durative():
         assert per > 20, f"seed {seed}: deliberating every {per:.0f} ticks"
 
 
-def test_commitments_complete_and_fail():
-    """Both outcomes must actually occur — a commitment system that only ever
-    succeeds is not being exercised."""
+def test_commitments_complete_in_a_real_run():
     rt = Runtime(42)
     seen = set()
     prev = None
@@ -69,7 +67,20 @@ def test_commitments_complete_and_fail():
             seen.add(c.status)
             prev = c
     assert DONE in seen, "no commitment ever completed"
-    assert FAILED in seen, "no commitment ever failed"
+
+
+def test_commitments_can_fail():
+    """Failure is provoked deterministically rather than hoped for.
+
+    A competent agent fails rarely — once it stopped chasing things it could
+    never catch, natural failures became scarce — so waiting for one in a live
+    run made this a test of how badly the policy behaves."""
+    rt = Runtime(42)
+    for _ in range(50):
+        rt.step()
+    c = rt.motor.start("goto", "no_such_entity")
+    assert c.status == FAILED
+    assert c.reason == "no_path"
 
 
 def test_commitment_is_interruptible():

@@ -14,7 +14,7 @@ All six phases built and measured. 50 tests green. Every hypothesis was tested a
 
 | | Claim | Result |
 |---|---|---|
-| **H1** | Gating cuts LLM calls ≥50× without degrading behaviour | **Supported** — 60.9× fewer calls, behaviour **+14.5% better** |
+| **H1** | Gating cuts LLM calls ≥50× without degrading behaviour | **Supported** — 78.3× fewer calls, behaviour **+6.9% better** |
 | **H2** | Surprise-weighted consolidation beats recency and random | **Supported** — recall 0.197 vs 0.033 vs 0.010 |
 | **H3** | Legible uncertainty produces epistemic action unprompted | **Supported** — 355 look-to-check actions, 34% refresh rate |
 | **H4** | Intent-rollout predicts animate entities better than diffusion | **Falsified** — −2%, across four kinds of moving entity |
@@ -33,7 +33,21 @@ pip install -e ".[dev]"
 python -m homunculus run --ticks 3000 --mind mock --view
 ```
 
-That runs the full stack offline — no API key, no network, no spend — and writes a self-contained `runs/latest/replay.html` you can open and scrub. The viewer shows the agent's **true position against its believed position**, which is the whole story in one picture.
+That runs the full stack offline — no API key, no network, no spend — and writes a self-contained `runs/latest/replay.html` you can open and scrub. The viewer shows the agent's **true position against its believed position**, which is the whole story in one picture, plus the **conscious stream**: what woke it, what it felt, what it saw, what it decided and why.
+
+```
+* t2323   ate food_a
+          finished what it was doing; exhausted (fatigue 0.99)
+          saw: food_a 0 away, r00 5 away, c02 6 away
+          "hungry at 0.44 and food_a is underfoot - eating now"
+          expected surprise: low
+```
+
+Add `--stream 60` to print that to the terminal instead. It is an instrument, not decoration — rendering it found four real bugs that passing tests and healthy averages had hidden.
+
+The viewer also shows **memory**: episodic (ranked by surprise, recalls highlighted, forgotten ones struck through), semantic facts with support counts, and procedural entries like `energy · goto food_c · 5/6 worked` — all synced to the scrubber, so you see what the agent held *at that moment*, including what it had already forgotten.
+
+Going live on real models: see [`GOING_LIVE.md`](GOING_LIVE.md).
 
 Reproduce the hypotheses:
 

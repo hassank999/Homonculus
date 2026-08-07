@@ -131,13 +131,13 @@ class Mind:
 
         if out.error or not out.parsed:
             self.errors += 1
-            return self._fallback(frame, soma)
+            return self._fallback(frame, soma, f"model failed ({out.error})")
 
         action = (out.parsed or {}).get("action") or {}
         verb = action.get("verb")
         if verb not in ("goto", "eat", "wait", "say"):
             self.errors += 1
-            return self._fallback(frame, soma)
+            return self._fallback(frame, soma, "model returned no usable action")
 
         self.last_note = (out.parsed.get("note") or "")[:200]
         self.last_prediction = out.parsed.get("prediction")
@@ -164,20 +164,32 @@ class Mind:
             }
             if (verb, choice.get("target")) not in legal:
                 self.errors += 1
-                return self._fallback(frame, soma)
+                return self._fallback(
+                    frame, soma,
+                    f"cannot {verb} {choice.get('target')} from here"
+                )
         return choice
 
-    @staticmethod
-    def _fallback(frame, soma):
-        """When the model fails, the body still has to do something sensible.
-        A dead tick is worse than a dull one."""
+    def _fallback(self, frame, soma, why: str = "falling back"):
+        """When the model's choice cannot be used, the body still has to do
+        something sensible. A dead tick is worse than a dull one.
+
+        The note is REPLACED here. Leaving the rejected choice's reasoning in
+        place made the stream describe an intention the agent never acted on —
+        it read as 'making for warmth_b' above an action of 'waited'.
+        """
+        self.last_prediction = None
         drive, _ = soma.worst()
         kinds = {"energy": "food", "warmth": "warmth"}.get(drive)
         if kinds:
-            cands = [e for e in frame.entities if e.kind == kinds]
+            legal = {a.get("target") for a in frame.affordances if a["verb"] == "goto"}
+            cands = [e for e in frame.entities
+                     if e.kind == kinds and e.id in legal]
             if cands:
                 cands.sort(key=lambda e: e.range)
+                self.last_note = f"{why}; heading for {cands[0].id} instead"
                 return {"verb": "goto", "target": cands[0].id}
+        self.last_note = f"{why}; waiting instead"
         return {"verb": "wait", "duration": 20}
 
     def stats(self) -> dict:

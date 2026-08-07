@@ -61,8 +61,15 @@ def _run(args) -> int:
         from .viewer import build as build_view
         p = build_view(events, args.view,
                        stride=max(1, args.ticks // 1500),
-                       model=provider.model if provider else None)
+                       model=provider.model if provider else None,
+                       memory=memory)
         print(f"  viewer     {p}")
+
+    if args.stream:
+        from .narrate import stream, to_text
+        entries = stream(events)
+        print(f"\n--- conscious stream ({len(entries)} entries) ---")
+        print(to_text(entries, limit=args.stream))
     return 0
 
 
@@ -100,6 +107,8 @@ def main(argv=None) -> int:
     r.add_argument("--min-interval", type=float, default=0.0,
                    help="seconds between LLM calls (rate governor)")
     r.add_argument("--view", nargs="?", const="runs/latest/replay.html", default=None)
+    r.add_argument("--stream", nargs="?", type=int, const=60, default=None,
+                   help="print the conscious stream to the terminal (N entries)")
     r.set_defaults(fn=_run)
 
     e = sub.add_parser("experiment", help="run a hypothesis measurement")

@@ -76,6 +76,7 @@ class Runtime:
         self._repeat = 0
         self._habit: dict | None = None      # the standing plan, re-issued reflexively
         self.habits = 0                      # times acted without consulting
+        self._last_reported = None           # commitment whose ending was logged
 
         # A habit is only reusable while it remains legal and useful; these
         # guards stop the agent repeating a plan the world has moved past.
@@ -97,7 +98,8 @@ class Runtime:
             valence=self.soma.valence,
             arousal=self.soma.arousal,
             entities=views,
-            affordances=affordances(self.wm, views, self.tick),
+            affordances=affordances(self.wm, views, self.tick,
+                                    unavailable=self.motor._failed),
         )
         c = self.motor.current
         f.budget = {
@@ -136,11 +138,42 @@ class Runtime:
             return None
         return h
 
+    def _why(self, reason, frame, prev_surprise) -> dict:
+        """The state that produced a decision: what was pressing, what was
+        surprising, and what was actually in view at the moment of choosing."""
+        drive, deficit = self.soma.worst()
+        why: dict = {
+            "drive": drive,
+            "value": round(self.soma.drives[drive].value, 3),
+            "valence": round(self.soma.valence, 3),
+            "arousal": round(self.soma.arousal, 3),
+        }
+        if reason == "surprise" and prev_surprise is not None:
+            top = prev_surprise.top(2)
+            if top:
+                why["surprised_by"] = [[k, round(v, 2)] for k, v in top]
+            if prev_surprise.existence:
+                why["existence"] = sorted(prev_surprise.existence)[:3]
+        if frame is not None:
+            # Only what could plausibly bear on the choice: near things it can
+            # see, plus anything it is notably unsure about.
+            seen = [
+                {"id": v.id, "kind": v.kind, "range": v.range,
+                 "conf": round(v.conf, 2), "age": v.age, "obs": v.observed}
+                for v in frame.entities
+                if (v.observed and v.range <= 8.0) or v.conf < 0.6
+            ]
+            seen.sort(key=lambda s: (not s["obs"], s["range"]))
+            why["saw"] = seen[:5]
+        return why
+
     # --- one tick ---------------------------------------------------------
     def step(self) -> dict:
         self.tick += 1
         t = self.tick
         self.motor.tick = t
+        pre_frame = self.frame
+        pre_surprise = self.last_surprise
 
         # 1. Deliberate only when there is nothing already underway.
         decided = None
@@ -254,13 +287,32 @@ class Runtime:
             ev["decision"] = decided
             if reason:
                 ev["gate"] = reason
+            # The causal chain behind this choice. Logged only at decision
+            # points, so it costs little, and it is what turns an event log
+            # into an account of WHY rather than merely what.
+            ev["because"] = self._why(reason, pre_frame, pre_surprise)
+            note = getattr(self.policy, "last_note", "") or ""
+            if note and reason != "habit":
+                ev["note"] = note[:240]
+            pred = getattr(self.policy, "last_prediction", None)
+            if pred and reason != "habit":
+                ev["expect"] = pred.get("expect_surprise")
         if rep.scalar > 0.0:
             ev["surprise"] = rep.to_dict()
         if events:
             ev["percepts"] = events
         c = self.motor.current
-        if c and c.status != "running":
+        if c and c.status != "running" and c is not self._last_reported:
+            # Report each commitment's ending exactly once, so the stream can
+            # close the loop on an intention rather than repeating it.
             ev["commitment"] = c.to_dict()
+            self._last_reported = c
+            if self.memory is not None:
+                # Procedural learning: what actually worked, in what situation.
+                drive, _ = self.soma.worst()
+                self.memory.procedural.record(
+                    drive, c.verb, c.target, c.status == "done"
+                )
         ev["pose"] = [round(v, 3) for v in self.wm.pose]
         ev["pose_conf"] = round(self.wm.pose_conf, 3)
         ev["drives"] = self.soma.to_dict()

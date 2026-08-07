@@ -27,11 +27,18 @@ class ReactivePolicy:
 
     name = "reactive"
 
+    def __init__(self):
+        # Populated on every choice so the conscious stream can say WHY, not
+        # just what. The LLM mind exposes the same two attributes.
+        self.last_note = ""
+        self.last_prediction = None
+
     def choose(self, frame, wm, soma, rng):
         d = soma.drives
         energy = d["energy"].value
         warmth = d["warmth"].value
         fatigue = d["fatigue"].value
+        self.last_prediction = None
 
         # 1. Hunger — the most urgent, and the one that requires re-checking.
         if energy < LOW_ENERGY:
@@ -46,7 +53,13 @@ class ReactivePolicy:
                 # is not close enough for the world, and treating it as close
                 # enough produced an agent that repeatedly "ate" thin air.
                 if b is not None and self._same_cell(b.pos, wm.pose):
+                    self.last_note = f"hungry ({energy:.2f}) and standing on {t}"
                     return {"verb": "eat", "target": t}
+                stale = b is not None and not b.state.get("available", True)
+                self.last_note = (
+                    f"hungry ({energy:.2f}); {t} may have regrown, going to look"
+                    if stale else f"hungry ({energy:.2f}), heading for {t}"
+                )
                 return {"verb": "goto", "target": t}
 
         # 2. Cold — linger once arrived; waiting warms AND rests.
@@ -55,27 +68,49 @@ class ReactivePolicy:
             if t:
                 b = wm.beliefs.get(t)
                 if b is not None and self._manhattan(b.pos, wm.pose) <= 1.2:
+                    self.last_note = f"cold ({warmth:.2f}), settling by {t}"
                     return {"verb": "wait", "duration": 30}
+                self.last_note = f"cold ({warmth:.2f}), heading for {t}"
                 return {"verb": "goto", "target": t}
 
         # 3. Tired.
         if fatigue > HIGH_FATIGUE:
+            self.last_note = f"tired ({fatigue:.2f}), resting"
             return {"verb": "wait", "duration": 40}
 
         # 4. Nothing urgent: re-check the stalest belief. Epistemic action —
         #    moving to reduce uncertainty rather than to satisfy a drive.
-        stale = [v for v in frame.entities if not v.observed and v.conf < 0.6]
+        # Weighted by whether the answer will KEEP: verifying a landmark buys
+        # lasting certainty, verifying a critter buys one tick of it.
+        stale = [
+            v for v in frame.entities
+            if not v.observed and v.conf < 0.6
+            and v.kind in ("landmark", "food", "warmth", "item")
+        ]
         if stale:
             stale.sort(key=lambda v: (v.conf, -v.age))
-            return {"verb": "goto", "target": stale[0].id}
+            s = stale[0]
+            self.last_note = (
+                f"nothing pressing; unsure about {s.id} "
+                f"(conf {s.conf:.2f}, unseen {s.age} ticks) - going to look"
+            )
+            return {"verb": "goto", "target": s.id}
 
-        cand = sorted(
-            v.id for v in frame.entities
-            if v.kind in ("landmark", "item", "food", "warmth")
-        )
+        # Wandering must change the vantage point: somewhere out of sight, or
+        # far enough that the walk reveals something. Out-of-sight-only made
+        # the agent sedentary; farthest-visible-only made it oscillate.
+        cand = [v for v in frame.entities
+                if v.kind in ("landmark", "item", "food", "warmth")
+                and (not v.observed or v.range >= 6.0)]
         if cand:
-            return {"verb": "goto", "target": rng.choice(cand)}
-        return {"verb": "wait", "duration": 10}
+            # Least-visited first: exploration is about where you have not
+            # BEEN, not what you have not seen.
+            cand.sort(key=lambda v: (round(v.visits, 1), v.observed, -v.age, v.id))
+            pick = cand[0].id
+            self.last_note = f"all needs met; nothing new here, heading for {pick}"
+            return {"verb": "goto", "target": pick}
+        self.last_note = "all needs met and nothing worth walking to; settling"
+        return {"verb": "wait", "duration": 25}
 
     @staticmethod
     def _manhattan(a, b) -> float:

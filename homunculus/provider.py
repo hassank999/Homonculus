@@ -204,11 +204,13 @@ class MockProvider:
         # Gate speech on the call counter rather than the tick: with habitual
         # action, decisions are rare enough that a tick-based schedule would
         # essentially never coincide with one.
-        choice = self._decide(frame, speak_now=(self.calls % 12 == 0))
+        choice, note, expect = self._decide(
+            frame, speak_now=(self.calls % 5 == 0)
+        )
         parsed = {
             "action": choice,
-            "prediction": {"expect_surprise": "low"},
-            "note": "mock",
+            "prediction": {"expect_surprise": expect},
+            "note": note,
         }
         text = json.dumps(parsed, sort_keys=True)
         # Token counts approximate the real shape so cost accounting is
@@ -221,45 +223,126 @@ class MockProvider:
         return Completion(parsed, usage, text)
 
     @staticmethod
-    def _decide(frame: dict, speak_now: bool = False) -> dict:
+    def _decide(frame: dict, speak_now: bool = False):
+        """Returns (action, note, expected_surprise).
+
+        The note is the agent's own account of why — it is what makes the
+        conscious stream readable, so the mock writes real reasoning rather
+        than a placeholder.
+        """
         drives = frame.get("drives") or {}
         ents = frame.get("entities") or []
         affs = frame.get("affordances") or []
+        energy = drives.get("energy", 1.0)
+        warmth = drives.get("warmth", 1.0)
+        fatigue = drives.get("fatigue", 0.0)
+
+        # Only ever choose from what perception actually offers. Selecting off
+        # the raw entity list meant picking targets that had been withdrawn
+        # (unreachable, or underfoot), which the mind then had to reject.
+        reachable = {a.get("target") for a in affs if a["verb"] == "goto"}
 
         def nearest(kind):
-            c = [e for e in ents if e.get("kind") == kind]
+            c = [e for e in ents
+                 if e.get("kind") == kind and e.get("id") in reachable]
             c.sort(key=lambda e: e.get("range", 1e9))
-            return c[0]["id"] if c else None
+            return c[0] if c else None
 
-        if any(a["verb"] == "eat" for a in affs) and drives.get("energy", 1) < 0.6:
+        if any(a["verb"] == "eat" for a in affs) and energy < 0.6:
             t = next(a["target"] for a in affs if a["verb"] == "eat")
-            return {"verb": "eat", "target": t}
-        if drives.get("energy", 1) < 0.55:
-            t = nearest("food")
-            if t:
-                return {"verb": "goto", "target": t}
-        if drives.get("warmth", 1) < 0.5:
-            t = nearest("warmth")
-            if t:
-                return {"verb": "goto", "target": t}
-        if drives.get("fatigue", 0) > 0.55:
-            return {"verb": "wait", "duration": 40}
-        # Speech is available only when someone is plausibly in earshot; say
-        # something occasionally so the channel is exercised.
+            return ({"verb": "eat", "target": t},
+                    f"hungry at {energy:.2f} and {t} is underfoot — eating now",
+                    "low")
+
+        if energy < 0.55:
+            e = nearest("food")
+            if e:
+                fresh = "in sight" if e.get("observed") else \
+                        f"remembered, {e.get('age')} ticks stale"
+                return ({"verb": "goto", "target": e["id"]},
+                        f"energy down to {energy:.2f}; {e['id']} is the closest "
+                        f"food at range {e.get('range')} ({fresh})",
+                        "low" if e.get("observed") else "medium")
+
+        if warmth < 0.5:
+            e = nearest("warmth")
+            if e:
+                # Standing on it already: linger rather than ask to walk here,
+                # which is not an available action and would be rejected.
+                if float(e.get("range", 99) or 99) < 1.0:
+                    return ({"verb": "wait", "duration": 30},
+                            f"cold at {warmth:.2f}; already on {e['id']}, "
+                            f"staying put to warm through",
+                            "low")
+                return ({"verb": "goto", "target": e["id"]},
+                        f"cold at {warmth:.2f}; making for {e['id']} to warm up",
+                        "low")
+
+        if fatigue > 0.55:
+            return ({"verb": "wait", "duration": 40},
+                    f"fatigue at {fatigue:.2f}; resting before doing more",
+                    "low")
+
+        # Speech is available only when someone is plausibly in earshot.
         if any(a["verb"] == "say" for a in affs) and speak_now:
             other = next((e for e in ents if e.get("kind") == "agent"), None)
             if other is not None:
-                return {"verb": "say",
-                        "text": f"i see {other['id']} at bearing "
-                                f"{other.get('bearing')} range {other.get('range')}"}
-        stale = [e for e in ents if not e.get("observed") and e.get("conf", 1) < 0.6]
+                return ({"verb": "say",
+                         "text": f"i see {other['id']} at bearing "
+                                 f"{other.get('bearing')} range {other.get('range')}"},
+                        f"{other['id']} is close enough to hear me; saying where I am",
+                        "low")
+
+        # Epistemic action, weighted by whether the answer will KEEP. Checking a
+        # landmark buys lasting certainty; checking a critter buys one tick of
+        # it, because the thing moves the moment you look away. Ignoring that
+        # had the agent spending most of its decisions chasing critters it can
+        # never pin down.
+        # Residents commute, so verifying one is stale again almost immediately;
+        # only genuinely stationary things repay the trip.
+        LASTING = {"landmark", "food", "warmth", "item"}
+        stale = [
+            e for e in ents
+            if not e.get("observed") and e.get("conf", 1) < 0.6
+            and e.get("kind") in LASTING and e.get("id") in reachable
+        ]
         if stale:
-            stale.sort(key=lambda e: e.get("conf", 1))
-            return {"verb": "goto", "target": stale[0]["id"]}
-        gotos = [a for a in affs if a["verb"] == "goto"]
-        if gotos:
-            return {"verb": "goto", "target": gotos[0]["target"]}
-        return {"verb": "wait", "duration": 10}
+            stale.sort(key=lambda e: (e.get("conf", 1), e.get("range", 0)))
+            s = stale[0]
+            return ({"verb": "goto", "target": s["id"]},
+                    f"nothing urgent, but only {s.get('conf'):.2f} sure about "
+                    f"{s['id']} after {s.get('age')} ticks - worth a look since "
+                    f"it should stay put",
+                    "high")
+
+        # Wandering must actually CHANGE the vantage point. A target is worth
+        # the trip if it is out of sight, or far enough away that walking there
+        # reveals something on the way. Requiring only "out of sight" made the
+        # agent sedentary — it never left its starting room, so it never
+        # discovered anything, and two agents never met. Requiring only
+        # "farthest visible" made it oscillate between adjacent objects.
+        by_id = {e["id"]: e for e in ents}
+        worth = [
+            a for a in affs
+            if a["verb"] == "goto"
+            and by_id.get(a["target"], {}).get("kind") in LASTING
+            and (not by_id.get(a["target"], {}).get("observed", False)
+                 or float(by_id.get(a["target"], {}).get("range", 0) or 0) >= 6.0)
+        ]
+        if worth:
+            worth.sort(key=lambda a: (
+                round(float(by_id[a["target"]].get("visits", 0) or 0), 1),  # least-visited
+                by_id[a["target"]].get("observed", False),                  # then unseen
+                -int(by_id[a["target"]].get("age", 0) or 0),                # then stalest
+            ))
+            pick = worth[0]["target"]
+            return ({"verb": "goto", "target": pick},
+                    f"all needs met (energy {energy:.2f}, warmth {warmth:.2f}); "
+                    f"nothing new here, heading for {pick}",
+                    "medium")
+        return ({"verb": "wait", "duration": 25},
+                "all needs met and nothing worth walking to; settling for a while",
+                "low")
 
 
 def build(kind: str = "mock", model: str | None = None, **kw) -> LLMProvider:

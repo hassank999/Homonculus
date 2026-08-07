@@ -314,6 +314,10 @@ class WorldModel:
                 id=eid, kind=b.kind, bearing=qb, range=qr,
                 conf=1.0 if seen_now else proj.conf,
                 age=age, observed=seen_now, state=dict(b.state),
+                # How much time the agent has recently spent near this thing.
+                # "Where have I not BEEN" is the exploration signal; "what have
+                # I not SEEN" merely ping-pongs between two landmarks.
+                visits=self._traffic_near(proj.pos),
                 hypotheses=hyps[:3],
             ))
         return views

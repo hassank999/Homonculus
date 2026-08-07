@@ -120,7 +120,12 @@ def h2(seeds=(1, 2, 3, 11), ticks=6000, capacity=60, k=4):
         # retains exactly the items the probe then asks about. So probe on
         # objective world-state changes — food consumed, entities appearing or
         # vanishing — sampled uniformly across the run.
-        notable = [w for w in writes if "ate " in w[1] or w[3]]
+        # Selectivity matters: probes must be genuine world-state CHANGES.
+        # Using "has entity tags" broke the moment episodes began being tagged
+        # with everything in view, since then almost every episode qualified
+        # and the probe set became a random sample rather than a notable one.
+        MARKS = ("ate ", " missing", " appeared", " changed")
+        notable = [w for w in writes if any(m in w[1] for m in MARKS)]
         if len(notable) < 8:
             continue
         rng = random.Random(seed)
