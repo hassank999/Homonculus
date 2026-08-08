@@ -28,27 +28,42 @@ from typing import Protocol
 
 TOGETHER_URL = "https://api.together.ai/v1/chat/completions"
 
-# Verified against the live Together catalog (2026-08-07). Re-check against
-# GET /v1/models before trusting the cost model — serverless endpoints get only
-# 2-3 weeks of deprecation notice, so these are config, not constants.
+# Verified live against GET /v1/models on 2026-08-08: all five IDs resolve and
+# every input/output price below matches the catalog exactly.
+#
+# Note the `-0731` suffix on Flash. Writing the bare `DeepSeek-V4-Flash` was a
+# 404 — the exact failure mode the go-live checklist predicted, and the reason
+# these are config rather than constants. Serverless endpoints get only 2-3
+# weeks of deprecation notice; re-verify before trusting the cost model.
 MODELS = {
-    "primary":  "zai-org/GLM-5.2",              # 1.40 / 0.26 cached / 4.40
-    "alt":      "deepseek-ai/DeepSeek-V4-Pro",  # 1.74 / 0.20 / 3.48
-    "cheap":    "MiniMaxAI/MiniMax-M3",         # 0.30 / 0.06 / 1.20
-    "floor":    "openai/gpt-oss-20b",           # 0.05 / -    / 0.20
-    "sleep":    "deepseek-ai/DeepSeek-V4-Flash",# 0.14 / 0.03 / 0.28
+    "primary":  "zai-org/GLM-5.2",                   # 1.40 / 0.26 cached / 4.40
+    "alt":      "deepseek-ai/DeepSeek-V4-Pro",       # 1.74 / 0.20 / 3.48
+    "cheap":    "MiniMaxAI/MiniMax-M3",              # 0.30 / 0.06 / 1.20
+    "floor":    "openai/gpt-oss-20b",                # 0.05 / -    / 0.20
+    "sleep":    "deepseek-ai/DeepSeek-V4-Flash-0731",# 0.14 / 0.03 / 0.28
 }
 
 # $ per million tokens: (input, cached input, output).
 PRICES = {
-    "zai-org/GLM-5.2":               (1.40, 0.26, 4.40),
-    "deepseek-ai/DeepSeek-V4-Pro":   (1.74, 0.20, 3.48),
-    "MiniMaxAI/MiniMax-M3":          (0.30, 0.06, 1.20),
-    "openai/gpt-oss-20b":            (0.05, 0.05, 0.20),
-    "deepseek-ai/DeepSeek-V4-Flash": (0.14, 0.03, 0.28),
+    "zai-org/GLM-5.2":                    (1.40, 0.26, 4.40),
+    "deepseek-ai/DeepSeek-V4-Pro":        (1.74, 0.20, 3.48),
+    "MiniMaxAI/MiniMax-M3":               (0.30, 0.06, 1.20),
+    "openai/gpt-oss-20b":                 (0.05, 0.05, 0.20),
+    "openai/gpt-oss-120b":                (0.15, 0.15, 0.60),
+    "deepseek-ai/DeepSeek-V4-Flash-0731": (0.14, 0.03, 0.28),
 }
 
 _THINK = re.compile(r"<think>.*?</think>", re.S)
+
+# Per-model request extras. Reasoning models spend the output budget on chain
+# of thought BEFORE emitting the answer, so with a small max_tokens they get
+# truncated mid-JSON and look incapable when they are merely misconfigured —
+# gpt-oss-20b failed 46% of calls this way until `reasoning_effort` was set.
+# The tick loop wants a decision, not an essay.
+MODEL_EXTRAS: dict[str, dict] = {
+    "openai/gpt-oss-20b":  {"reasoning_effort": "low"},
+    "openai/gpt-oss-120b": {"reasoning_effort": "low"},
+}
 
 
 @dataclass
@@ -113,10 +128,15 @@ class TogetherProvider:
     name = "together"
 
     def __init__(self, model: str | None = None, api_key: str | None = None,
-                 max_tokens: int = 700, timeout: float = 60.0, retries: int = 3):
+                 max_tokens: int = 1200, timeout: float = 60.0, retries: int = 3,
+                 extra: dict | None = None):
         self.model = model or MODELS["primary"]
         self.api_key = api_key or os.environ.get("TOGETHER_API_KEY", "")
         self.max_tokens = max_tokens
+        self.extra = dict(MODEL_EXTRAS.get(self.model, {}))
+        if extra:
+            self.extra.update(extra)
+        self.truncations = 0
         self.timeout = timeout
         self.retries = retries
         self._client = None
@@ -147,6 +167,7 @@ class TogetherProvider:
                 "json_schema": {"name": "mind_output", "schema": schema},
             },
         }
+        body.update(self.extra)
         headers = {"Authorization": f"Bearer {self.api_key}"}
 
         last = None
@@ -164,7 +185,10 @@ class TogetherProvider:
                 text = _strip_reasoning(msg.get("content") or "")
                 if choice.get("finish_reason") == "length":
                     # Truncated JSON is unparseable; treat as an error path
-                    # rather than letting a half-object through.
+                    # rather than letting a half-object through. Counted
+                    # separately because a run full of these means the budget
+                    # is wrong, not that the model cannot do the task.
+                    self.truncations += 1
                     return Completion({}, _extract_usage(payload), text,
                                       error="truncated")
                 try:

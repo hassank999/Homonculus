@@ -53,6 +53,13 @@ def _run(args) -> int:
         s = rt.policy.stats()
         print(f"  mind       calls={s['calls']} errors={s['errors']} "
               f"cost=${s['cost_usd']:.4f} model={s['model']}")
+        if s["calls"]:
+            # Cache hit rate is the difference between the modelled cost and
+            # roughly 4x it, so it is worth seeing on every run.
+            prompt = max(s["tokens"] - 0, 1)
+            print(f"  tokens     total={s['tokens']} cached={s['cached_tokens']} "
+                  f"({100.0 * s['cached_tokens'] / prompt:.0f}% of all tokens) "
+                  f"· ${s['cost_usd'] / s['calls']:.5f}/call")
     if memory is not None:
         print(f"  memory     episodic={len(memory.episodic.items)} "
               f"facts={len(memory.semantic.facts)} sleeps={memory.sleeps}")

@@ -1,6 +1,14 @@
 # Going live on Together
 
-Everything so far runs against `MockProvider`. **No real model has ever driven this agent.** This is the checklist for the first live run, in order, with the things most likely to break called out.
+**Status: done, 2026-08-08.** The checklist below was executed end to end; results and what it caught are recorded inline. Keep it as the procedure for any new model, key, or environment.
+
+**What it caught, in order:**
+1. `deepseek-ai/DeepSeek-V4-Flash` was a **404** — the live ID carries a `-0731` suffix. Caught at step 1, before any spend. Every other ID and *every price* matched.
+2. Both `api.together.ai` and `api.together.xyz` resolve — aliases, non-issue.
+3. A real model attaches `target` to a `wait` action (legal per the schema, never produced by the mock). It mixed `None`/`str` in procedural keys and **killed the viewer build**.
+4. `gpt-oss-20b`'s apparent **46% error rate was misconfiguration, not incapacity** — a reasoning model spending its output budget on chain of thought. `reasoning_effort: "low"` fixed it. Truncations are now counted separately so this cannot masquerade as a capability floor again.
+
+Total spend for the full sweep: **~$0.15.**
 
 ## 0. Before spending anything
 

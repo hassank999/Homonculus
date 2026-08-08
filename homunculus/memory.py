@@ -348,6 +348,12 @@ class Memory:
             "procedural": [
                 {"situation": k[0], "verb": k[1], "target": k[2],
                  "n": v[0], "wins": v[1]}
-                for k, v in sorted(self.procedural.stats.items())
+                # Coerce the optional target for sorting: a real model may
+                # attach a target to a verb that does not need one, which mixes
+                # None and str in otherwise-identical keys and makes the
+                # comparison explode. The mock never did this.
+                for k, v in sorted(self.procedural.stats.items(),
+                                   key=lambda kv: (kv[0][0], kv[0][1],
+                                                   kv[0][2] or ""))
             ],
         }

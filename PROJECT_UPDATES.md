@@ -4,6 +4,53 @@ Running log of progress after the plan was finalized. Newest first. The plan its
 
 ---
 
+## 2026-08-08 — **LIVE.** Real models drive the agent. The capability floor did not break.
+
+Total spend for everything below: **~$0.15.**
+
+### The sweep — the question the project was built to ask
+
+3000 ticks each, identical world and seed, only the model changed:
+
+| model | calls | errors | energy | warmth | fatigue | $/call | run cost |
+|---|---|---|---|---|---|---|---|
+| `zai-org/GLM-5.2` | 63 | 5 | 0.79 | 0.89 | 0.28 | $0.00123 | $0.077 |
+| `MiniMaxAI/MiniMax-M3` | 71 | 6 | 0.78 | 0.96 | 0.00 | $0.00037 | $0.026 |
+| `openai/gpt-oss-20b` | 65 | 7 | **0.93** | **0.91** | 0.14 | $0.00008 | **$0.005** |
+
+**The floor did not break.** A 20B open model kept the body healthiest of the three at **1/15th the cost** of GLM-5.2. The honest reading is not "small models are as good" — it is that **this architecture does the hard part**. Perception, prediction, belief maintenance and error correction never touch the model; the mind picks one item from a pre-validated affordance list. That is a job a small model can do.
+
+### A correction to my own result
+
+gpt-oss-20b first showed a **46% error rate**, which reads as "too weak for the task." It was not. Every failure was `truncated`: it is a *reasoning* model that spent its 700-token output budget on chain of thought before emitting any JSON. Setting `reasoning_effort: "low"` and raising the budget took it to **6/6 clean** in isolation and 7 errors in 65 calls in the full run.
+
+I had a false capability floor and would have published it. `MODEL_EXTRAS` now carries per-model request params, and truncations are counted separately from other errors precisely so "the budget is wrong" cannot masquerade as "the model cannot do this."
+
+### What live found that the mock could not
+
+Both are exactly the "cooperative liar" problem flagged before the run — the mock always returned well-formed, legal, minimal JSON, and a real model does not.
+
+1. **The model attaches `target` to a `wait` action.** Permitted by my schema, never produced by the mock. It mixed `None` and `str` in otherwise-identical procedural keys, and sorting them **killed the entire viewer build**. Fixed at both ends (robust sort; targets dropped from verbs that take none) with a regression test.
+2. **`deepseek-ai/DeepSeek-V4-Flash` was a 404** — the real ID carries a `-0731` suffix. Caught by step 1 of the checklist, before any spend. All five other IDs and *every* price matched the cost model exactly.
+
+### Verified against reality
+
+- **Prompt caching works**: 40–43% of tokens billed at the cached rate on GLM-5.2 and MiniMax-M3. `gpt-oss-20b` reports `cached=0` — it has no cached-input pricing, as the research warned, so its cost edge is real but smaller than the sticker suggests.
+- **Cost is ~3× cheaper than modelled** — $0.0012/call against a predicted ~$0.004. The Frame is smaller than the 2000-token estimate.
+- **Both base URLs work**: `api.together.ai` and `api.together.xyz` are aliases (both 401 without a key). The discrepancy flagged in `GOING_LIVE.md` was a non-issue.
+- **The reasoning is genuine.** From the live stream, unprompted:
+  - *"Energy is the lowest-priority drive relative to comfort; food is close and visible. Go eat."*
+  - *"on food_c now; energy 0.79 is good but topping up while here is efficient, fatigue low"*
+  - *"refresh stale resident belief; drives all comfortable"* — **H3 emerging from a real model**, choosing epistemic action with no drive pressing and nothing in the prompt telling it to.
+
+### Caveats worth carrying forward
+
+- One seed per model. The sweep shows the floor is *reachable*, not that the ranking between models is stable.
+- The task score is homeostasis. It shows competence and survival, not sophistication.
+- Errors are non-zero everywhere (5–7 per ~65 calls, ~8–10%). The fallback path absorbs them, which is why drives stay healthy — but that means **the architecture's robustness is partly masking model failures**, and a stricter test would separate the two.
+
+---
+
 ## 2026-08-07 — Memory viewer, cleanup, and a go-live checklist. **61/61 green.**
 
 Paused before the live run, as asked. Cleaned up everything outstanding.

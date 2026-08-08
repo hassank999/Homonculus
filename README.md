@@ -8,9 +8,23 @@ Unobserved parts of the world aren't simulated in the agent's head. They're time
 
 **Thesis:** prediction error is sufficient as the central currency of an embodied agent, and gating cognition on it makes the whole thing affordable.
 
-## Status: first light
+## Status: live
 
-All six phases built and measured. 50 tests green. Every hypothesis was tested against a baseline that could have falsified it, and one did.
+Real open models drive the agent on [Together](https://together.ai). The capability sweep — the question the whole thing was built to ask, *how little mind does belief-maintenance need?* — ran 3000 ticks per model on an identical world and seed:
+
+| model | calls | errors | energy | warmth | $/call | run cost |
+|---|---|---|---|---|---|---|
+| `zai-org/GLM-5.2` | 63 | 5 | 0.79 | 0.89 | $0.00123 | $0.077 |
+| `MiniMaxAI/MiniMax-M3` | 71 | 6 | 0.78 | 0.96 | $0.00037 | $0.026 |
+| `openai/gpt-oss-20b` | 65 | 7 | **0.93** | **0.91** | $0.00008 | **$0.005** |
+
+**The floor did not break.** A 20B model kept the body healthiest, at 1/15th the cost of the largest. The honest reading isn't that small models are as capable — it's that **the architecture does the hard part**: perception, prediction, belief maintenance and error correction never touch the model, which only picks one item from a pre-validated affordance list.
+
+Prompt caching verified live (40–43% of tokens at the cached rate), and cost came in ~3× cheaper than modelled. Full numbers and caveats in [`PROJECT_UPDATES.md`](PROJECT_UPDATES.md).
+
+## Hypotheses
+
+All six phases built and measured. 61 tests green. Every hypothesis was tested against a baseline that could have falsified it, and one did.
 
 | | Claim | Result |
 |---|---|---|

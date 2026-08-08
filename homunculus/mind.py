@@ -143,10 +143,14 @@ class Mind:
         self.last_prediction = out.parsed.get("prediction")
 
         choice = {"verb": verb}
-        if action.get("target"):
+        # A target is only meaningful for verbs that act ON something. Models
+        # readily attach one to `wait` — the schema permits it and it is
+        # harmless to them — but carrying it through pollutes commitment
+        # identity and procedural keys downstream.
+        if action.get("target") and verb in ("goto", "eat"):
             choice["target"] = action["target"]
         if verb == "wait":
-            choice["duration"] = int(action.get("duration") or 20)
+            choice["duration"] = max(1, min(int(action.get("duration") or 20), 200))
         if verb == "say":
             # Speech is an action, not a parallel channel: it costs a turn and
             # only reaches whoever is close enough to hear.

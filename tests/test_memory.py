@@ -173,6 +173,48 @@ def test_episode_text_is_readable():
         assert len(t) < 120
 
 
+def test_export_survives_optional_targets():
+    """Regression from the first live run.
+
+    A real model attached a `target` to a `wait` action — permitted by the
+    schema, never produced by the mock — which mixed None and str in otherwise
+    identical procedural keys and made sorting them raise. The whole viewer
+    build died on it. Export must tolerate a model's harmless quirks.
+    """
+    mem = Memory()
+    mem.procedural.record("energy", "wait", None, True)
+    mem.procedural.record("energy", "wait", "food_c", True)
+    mem.procedural.record("energy", "goto", "food_a", False)
+    ex = mem.export()
+    assert len(ex["procedural"]) == 3
+
+
+def test_mind_drops_targets_from_verbs_that_take_none():
+    """A target on `wait` is meaningless; carrying it through pollutes
+    commitment identity and the procedural store."""
+    from homunculus.mind import Mind
+    from homunculus.provider import Completion, Usage
+
+    class Chatty:
+        name, model = "chatty", "chatty/x"
+
+        def complete(self, system, user, schema):
+            return Completion(
+                {"action": {"verb": "wait", "target": "food_c", "duration": 25}},
+                Usage(), "{}",
+            )
+
+    from homunculus.gate import SurpriseGate
+    from homunculus.loop import Runtime
+
+    mind = Mind(Chatty())
+    rt = Runtime(5, policy=mind, gate=SurpriseGate())
+    choice = mind.choose(rt.frame, rt.wm, rt.soma, None)
+    assert choice["verb"] == "wait"
+    assert "target" not in choice
+    assert choice["duration"] == 25
+
+
 def test_memory_write_is_selective():
     """A tick that went exactly as predicted teaches nothing and must not be
     stored, or the bounded store fills with noise."""
